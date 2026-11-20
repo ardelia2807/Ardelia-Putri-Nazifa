@@ -50,7 +50,12 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     try {
       data = JSON.parse(text);
     } catch {
-      data = { error: text };
+      const looksLikeHtml = text.trimStart().startsWith('<');
+      data = {
+        error: looksLikeHtml
+          ? `Server API tidak merespons JSON (${res.status}). Pastikan backend /api aktif dan konfigurasi vercel.json sudah terpasang.`
+          : text,
+      };
     }
   }
 

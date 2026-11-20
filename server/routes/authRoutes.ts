@@ -70,9 +70,11 @@ authRoutes.post('/login', (req, res) => {
   }
 
   const token = signAuthToken(authUser.id, authUser.role);
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: 'lax',
+    secure: isHttps,
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: '/',
   });

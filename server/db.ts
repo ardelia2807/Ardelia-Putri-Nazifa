@@ -4,7 +4,23 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 
-const dataDir = path.resolve(process.cwd(), 'data');
+function resolveDataDir(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return path.join('/tmp', 'digital_balance_data');
+  }
+  const localDir = path.resolve(process.cwd(), 'data');
+  try {
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    fs.accessSync(localDir, fs.constants.W_OK);
+    return localDir;
+  } catch {
+    return path.join('/tmp', 'digital_balance_data');
+  }
+}
+
+const dataDir = resolveDataDir();
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
@@ -12,14 +28,22 @@ if (!fs.existsSync(dataDir)) {
 const dbPath = path.join(dataDir, 'digital_balance.db');
 export const db = new DatabaseSync(dbPath);
 
-db.exec('PRAGMA journal_mode = WAL;');
+try {
+  db.exec('PRAGMA journal_mode = WAL;');
+} catch {
+  // Fallback if filesystem does not support WAL shared memory
+}
 db.exec('PRAGMA foreign_keys = ON;');
 
 export function genId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
+let dbInitialized = false;
+
 export function initDatabase() {
+  if (dbInitialized) return;
+  dbInitialized = true;
   db.exec(`
     CREATE TABLE IF NOT EXISTS schools (
       id TEXT PRIMARY KEY,
