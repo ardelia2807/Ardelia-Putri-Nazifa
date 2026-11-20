@@ -1,0 +1,6 @@
+{
+  "name": "DIGITAL BALANCE",
+  "description": "Aplikasi layanan Bimbingan dan Konseling bidang pribadi berbasis Multi-Role dan Multi-School untuk membantu peserta didik membangun kebiasaan digital yang sehat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
