@@ -143,6 +143,7 @@ export function AdminDashboard({
   activeTab,
   onSelectTab,
   onLogout,
+  onUserUpdated,
   accessNotice,
   onDismissNotice,
 }: {
@@ -150,6 +151,7 @@ export function AdminDashboard({
   activeTab: string;
   onSelectTab: (tab: string) => void;
   onLogout: () => void;
+  onUserUpdated?: (updated: AuthUser) => void;
   accessNotice?: string | null;
   onDismissNotice?: () => void;
 }) {
@@ -241,6 +243,16 @@ export function AdminDashboard({
   const [newPasswordInput, setNewPasswordInput] = useState('');
 
   const [deleteBkTarget, setDeleteBkTarget] = useState<BkTeacher | null>(null);
+
+  const [adminAccountModalOpen, setAdminAccountModalOpen] = useState(false);
+  const [adminAccountForm, setAdminAccountForm] = useState({
+    fullName: user.fullName,
+    username: user.username,
+    email: user.email,
+    currentPassword: '',
+    newPassword: '',
+  });
+  const [adminAccountSaving, setAdminAccountSaving] = useState(false);
 
   const [checkedTests, setCheckedTests] = useState<Record<number, boolean>>({});
   const [guideSubTab, setGuideSubTab] = useState<'panduan' | 'uji' | 'ai-tools'>('panduan');
@@ -556,6 +568,41 @@ export function AdminDashboard({
     }
   }
 
+  function openAdminAccountModal() {
+    setAdminAccountForm({
+      fullName: user.fullName,
+      username: user.username,
+      email: user.email,
+      currentPassword: '',
+      newPassword: '',
+    });
+    setAdminAccountModalOpen(true);
+  }
+
+  async function saveAdminAccount(e: React.FormEvent) {
+    e.preventDefault();
+    setAdminAccountSaving(true);
+    try {
+      const res = await apiFetch<{ ok: boolean; user?: AuthUser }>('/api/admin/account', {
+        method: 'PUT',
+        body: JSON.stringify(adminAccountForm),
+      });
+      if (res.user && onUserUpdated) {
+        onUserUpdated(res.user);
+      }
+      setAdminAccountModalOpen(false);
+      setFeedback({
+        type: 'ok',
+        text: 'Kredensial akun Admin Central berhasil diperbarui. Simpan username dan password baru Anda secara pribadi.',
+      });
+      if (activeTab === 'pengguna') await loadUsers();
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal memperbarui akun Admin.' });
+    } finally {
+      setAdminAccountSaving(false);
+    }
+  }
+
   async function saveClass(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedSchoolId) return;
@@ -651,17 +698,27 @@ export function AdminDashboard({
                 Statistik keseluruhan DIGITAL BALANCE berdasarkan data langsung dari database.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                onSelectTab('sekolah');
-                openAddSchool();
-              }}
-              className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2 self-start sm:self-auto"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Sekolah</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={openAdminAccountModal}
+                className="px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-medium rounded-lg inline-flex items-center gap-2"
+              >
+                <KeyRound className="w-4 h-4 text-violet-700" />
+                <span>Akun &amp; Password Admin</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectTab('sekolah');
+                  openAddSchool();
+                }}
+                className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Tambah Sekolah</span>
+              </button>
+            </div>
           </div>
 
           {overview ? (
@@ -1106,6 +1163,14 @@ export function AdminDashboard({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                onClick={openAdminAccountModal}
+                className="px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-medium rounded-lg inline-flex items-center gap-2"
+              >
+                <KeyRound className="w-4 h-4 text-violet-700" />
+                <span>Akun Admin</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => openAddBk()}
                 className="px-3.5 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2"
               >
@@ -1157,6 +1222,17 @@ export function AdminDashboard({
               ))}
             </select>
           </div>
+
+          {users.some((u) => u.role === 'GURU_BK' && u.status === 'INACTIVE') && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="text-sm text-amber-900">
+                <span className="font-semibold">
+                  {users.filter((u) => u.role === 'GURU_BK' && u.status === 'INACTIVE').length} akun Guru BK
+                </span>{' '}
+                berstatus Nonaktif / Menunggu Persetujuan. Klik tombol aktivasi pada baris terkait agar Guru BK dapat masuk ke sistem.
+              </div>
+            </div>
+          )}
 
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
@@ -1936,6 +2012,93 @@ export function AdminDashboard({
         title="Konfirmasi Hapus Guru BK"
         message={`Hapus akun Guru BK "${deleteBkTarget?.fullName}" dari sistem?`}
       />
+
+      <Modal
+        open={adminAccountModalOpen}
+        onClose={() => setAdminAccountModalOpen(false)}
+        title="Pengaturan Akun & Password Admin Central"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={saveAdminAccount} className="space-y-4">
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Kredensial Admin Central hanya diketahui oleh Anda. Ubah username, email, atau password secara berkala untuk menjaga keamanan seluruh sekolah.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Nama Lengkap</label>
+            <input
+              required
+              type="text"
+              value={adminAccountForm.fullName}
+              onChange={(e) => setAdminAccountForm({ ...adminAccountForm, fullName: e.target.value })}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Username Admin</label>
+              <input
+                required
+                type="text"
+                value={adminAccountForm.username}
+                onChange={(e) => setAdminAccountForm({ ...adminAccountForm, username: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Email Admin</label>
+              <input
+                required
+                type="email"
+                value={adminAccountForm.email}
+                onChange={(e) => setAdminAccountForm({ ...adminAccountForm, email: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Password Saat Ini (wajib untuk konfirmasi)
+            </label>
+            <input
+              required
+              type="password"
+              value={adminAccountForm.currentPassword}
+              onChange={(e) => setAdminAccountForm({ ...adminAccountForm, currentPassword: e.target.value })}
+              placeholder="Masukkan password saat ini"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Password Baru (opsional, min. 6 karakter)
+            </label>
+            <input
+              type="password"
+              minLength={6}
+              value={adminAccountForm.newPassword}
+              onChange={(e) => setAdminAccountForm({ ...adminAccountForm, newPassword: e.target.value })}
+              placeholder="Kosongkan jika tidak ingin mengganti password"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setAdminAccountModalOpen(false)}
+              className="px-4 py-2 text-sm border border-slate-300 rounded-lg"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              disabled={adminAccountSaving}
+              className="px-4 py-2 text-sm font-medium bg-violet-700 text-white rounded-lg hover:bg-violet-800 disabled:opacity-60"
+            >
+              {adminAccountSaving ? 'Menyimpan...' : 'Simpan Perubahan'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </DashboardShell>
   );
 }

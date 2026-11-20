@@ -658,3 +658,245 @@ studentRoutes.post('/consultations', (req: AuthedRequest, res) => {
 
   res.status(201).json({ id });
 });
+
+// --- RUANG FOKUS & KONTROL DIRI ---
+studentRoutes.get('/focus-sessions', (req: AuthedRequest, res) => {
+  const { studentId } = getStudentCtx(req);
+  const sessions = db
+    .prepare(
+      `SELECT id, student_id as studentId, school_id as schoolId, title, duration_minutes as durationMinutes,
+              session_date as sessionDate, reflection_note as reflectionNote, created_at as createdAt
+       FROM focus_sessions
+       WHERE student_id = ?
+       ORDER BY session_date DESC, created_at DESC
+       LIMIT 30`
+    )
+    .all(studentId) as Array<{ durationMinutes: number }>;
+
+  const totals = db
+    .prepare('SELECT COUNT(*) as sessionCount, COALESCE(SUM(duration_minutes), 0) as totalMinutes FROM focus_sessions WHERE student_id = ?')
+    .get(studentId) as { sessionCount: number; totalMinutes: number };
+
+  res.json({
+    sessions,
+    sessionCount: totals.sessionCount,
+    totalMinutes: totals.totalMinutes,
+  });
+});
+
+studentRoutes.post('/focus-sessions', (req: AuthedRequest, res) => {
+  const { studentId, schoolId } = getStudentCtx(req);
+  const { title, durationMinutes, sessionDate, reflectionNote } = req.body as {
+    title?: string;
+    durationMinutes?: number;
+    sessionDate?: string;
+    reflectionNote?: string;
+  };
+
+  const mins = Number(durationMinutes);
+  if (!title?.trim() || !Number.isFinite(mins) || mins < 1 || mins > 480) {
+    return res.status(400).json({ error: 'Judul sesi fokus dan durasi (1–480 menit) wajib diisi.' });
+  }
+
+  const finalDate = sessionDate?.trim() || new Date().toISOString().slice(0, 10);
+  const id = genId('foc');
+  db.prepare(
+    `INSERT INTO focus_sessions (id, student_id, school_id, title, duration_minutes, session_date, reflection_note)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, studentId, schoolId, title.trim(), Math.round(mins), finalDate, (reflectionNote ?? '').trim());
+
+  logAudit({
+    userId: req.authUser!.id,
+    username: req.authUser!.username,
+    userRole: req.authUser!.role,
+    schoolId,
+    action: 'COMPLETE_FOCUS_SESSION',
+    entityType: 'FOCUS_SESSION',
+    entityId: id,
+    details: `Peserta didik menyelesaikan sesi fokus "${title.trim()}" (${Math.round(mins)} menit).`,
+  });
+
+  res.status(201).json({ id });
+});
+
+studentRoutes.delete('/focus-sessions/:id', (req: AuthedRequest, res) => {
+  const { studentId } = getStudentCtx(req);
+  const existing = db.prepare('SELECT id, student_id FROM focus_sessions WHERE id = ?').get(req.params.id) as
+    | { id: string; student_id: string }
+    | undefined;
+  if (!existing) return res.status(404).json({ error: 'Catatan sesi fokus tidak ditemukan.' });
+  if (existing.student_id !== studentId) return res.status(403).json({ error: 'Akses ditolak.' });
+
+  db.prepare('DELETE FROM focus_sessions WHERE id = ?').run(existing.id);
+  res.json({ ok: true });
+});
+
+// --- MISI DIGITAL, POIN & LENCANA ---
+const ALLOWED_MISSION_POINTS: Record<string, number> = {
+  detoks_malam: 30,
+  mode_senyap: 25,
+  jurnal_jujur: 25,
+  aksi_nyata: 30,
+  kurasi_feed: 20,
+  simulasi_keputusan: 40,
+};
+
+function computeLevel(points: number) {
+  const levels = [
+    { level: 1, title: 'Penjelajah Sadar', min: 0, next: 100 },
+    { level: 2, title: 'Pengatur Waktu', min: 100, next: 250 },
+    { level: 3, title: 'Penjaga Fokus', min: 250, next: 500 },
+    { level: 4, title: 'Ksatria Kontrol Diri', min: 500, next: 900 },
+    { level: 5, title: 'Duta Digital Balance', min: 900, next: 1500 },
+  ];
+  let current = levels[0];
+  for (const lvl of levels) {
+    if (points >= lvl.min) current = lvl;
+  }
+  const span = Math.max(1, current.next - current.min);
+  const progressPercent = Math.min(100, Math.max(0, Math.round(((points - current.min) / span) * 100)));
+  return {
+    level: current.level,
+    title: current.title,
+    nextLevelPoints: current.next,
+    progressPercent,
+  };
+}
+
+studentRoutes.get('/missions', (req: AuthedRequest, res) => {
+  const { studentId } = getStudentCtx(req);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const missionPoints = (
+    db.prepare('SELECT COALESCE(SUM(points), 0) as p FROM student_missions WHERE student_id = ?').get(studentId) as { p: number }
+  ).p;
+  const focusCount = (
+    db.prepare('SELECT COUNT(*) as c FROM focus_sessions WHERE student_id = ?').get(studentId) as { c: number }
+  ).c;
+  const assessmentCount = (
+    db.prepare('SELECT COUNT(*) as c FROM self_assessments WHERE student_id = ?').get(studentId) as { c: number }
+  ).c;
+  const usageCount = (
+    db.prepare('SELECT COUNT(*) as c FROM usage_records WHERE student_id = ?').get(studentId) as { c: number }
+  ).c;
+  const journalCount = (
+    db.prepare('SELECT COUNT(*) as c FROM reflection_journals WHERE student_id = ?').get(studentId) as { c: number }
+  ).c;
+  const completedTargetsCount = (
+    db.prepare("SELECT COUNT(*) as c FROM targets WHERE student_id = ? AND status = 'SELESAI'").get(studentId) as { c: number }
+  ).c;
+  const missionTotalCount = (
+    db.prepare('SELECT COUNT(*) as c FROM student_missions WHERE student_id = ?').get(studentId) as { c: number }
+  ).c;
+
+  // Real earned points from missions + activity bonuses
+  const totalPoints =
+    missionPoints + focusCount * 20 + assessmentCount * 25 + usageCount * 10 + journalCount * 15 + completedTargetsCount * 30;
+
+  const completedTodayRows = db
+    .prepare('SELECT mission_key as missionKey FROM student_missions WHERE student_id = ? AND completed_date = ?')
+    .all(studentId, today) as Array<{ missionKey: string }>;
+
+  const activeDays = (
+    db.prepare('SELECT COUNT(DISTINCT completed_date) as d FROM student_missions WHERE student_id = ?').get(studentId) as { d: number }
+  ).d;
+
+  const recentCompletions = db
+    .prepare(
+      `SELECT id, mission_key as missionKey, mission_title as missionTitle, points, completed_date as completedDate
+       FROM student_missions
+       WHERE student_id = ?
+       ORDER BY created_at DESC
+       LIMIT 10`
+    )
+    .all(studentId);
+
+  const badges = [
+    {
+      id: 'b_cek',
+      title: 'Sadar Diri',
+      desc: 'Menyelesaikan minimal 1x Cek Diri',
+      unlocked: assessmentCount >= 1,
+    },
+    {
+      id: 'b_catat',
+      title: 'Pelacak Waktu',
+      desc: 'Mencatat minimal 3 penggunaan aplikasi',
+      unlocked: usageCount >= 3,
+    },
+    {
+      id: 'b_jurnal',
+      title: 'Penulis Refleksi',
+      desc: 'Menulis minimal 2 Jurnal Refleksi',
+      unlocked: journalCount >= 2,
+    },
+    {
+      id: 'b_target',
+      title: 'Penakluk Target',
+      desc: 'Menyelesaikan minimal 1 Target Saya',
+      unlocked: completedTargetsCount >= 1,
+    },
+    {
+      id: 'b_fokus',
+      title: 'Fokus Tanpa Distraksi',
+      desc: 'Menyelesaikan minimal 1 Sesi Fokus',
+      unlocked: focusCount >= 1,
+    },
+    {
+      id: 'b_misi',
+      title: 'Pejuang Keseimbangan',
+      desc: 'Menyelesaikan minimal 3 Misi / Simulasi',
+      unlocked: missionTotalCount >= 3,
+    },
+  ];
+
+  res.json({
+    totalPoints,
+    levelInfo: computeLevel(totalPoints),
+    activeDays,
+    completedTodayKeys: completedTodayRows.map((r) => r.missionKey),
+    recentCompletions,
+    badges,
+  });
+});
+
+studentRoutes.post('/missions/complete', (req: AuthedRequest, res) => {
+  const { studentId, schoolId } = getStudentCtx(req);
+  const { missionKey, missionTitle } = req.body as {
+    missionKey?: string;
+    missionTitle?: string;
+  };
+
+  if (!missionKey || !(missionKey in ALLOWED_MISSION_POINTS)) {
+    return res.status(400).json({ error: 'Jenis misi tidak valid.' });
+  }
+
+  const points = ALLOWED_MISSION_POINTS[missionKey];
+  const today = new Date().toISOString().slice(0, 10);
+  const existing = db
+    .prepare('SELECT id FROM student_missions WHERE student_id = ? AND mission_key = ? AND completed_date = ?')
+    .get(studentId, missionKey, today);
+
+  if (existing) {
+    return res.json({ ok: true, alreadyCompleted: true, message: 'Misi ini sudah kamu selesaikan hari ini.' });
+  }
+
+  const id = genId('msn');
+  db.prepare(
+    `INSERT INTO student_missions (id, student_id, school_id, mission_key, mission_title, points, completed_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, studentId, schoolId, missionKey, (missionTitle ?? missionKey).trim(), points, today);
+
+  logAudit({
+    userId: req.authUser!.id,
+    username: req.authUser!.username,
+    userRole: req.authUser!.role,
+    schoolId,
+    action: 'COMPLETE_MISSION',
+    entityType: 'MISSION',
+    entityId: id,
+    details: `Peserta didik menyelesaikan misi "${(missionTitle ?? missionKey).trim()}" (+${points} poin).`,
+  });
+
+  res.status(201).json({ ok: true, alreadyCompleted: false, points, id });
+});

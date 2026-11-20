@@ -210,6 +210,29 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS focus_sessions (
+      id TEXT PRIMARY KEY,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL,
+      session_date TEXT NOT NULL,
+      reflection_note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS student_missions (
+      id TEXT PRIMARY KEY,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      mission_key TEXT NOT NULL,
+      mission_title TEXT NOT NULL,
+      points INTEGER NOT NULL,
+      completed_date TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (student_id, mission_key, completed_date)
+    );
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -225,20 +248,86 @@ export function initDatabase() {
   `);
 
   seedInitialSystemData();
+  syncAdminAccountFromEnv();
+}
+
+function syncAdminAccountFromEnv() {
+  const envUsername = process.env.ADMIN_USERNAME?.trim();
+  const envEmail = process.env.ADMIN_EMAIL?.trim();
+  const envPassword = process.env.ADMIN_PASSWORD?.trim();
+  const envFullName = process.env.ADMIN_FULL_NAME?.trim();
+
+  if (!envUsername && !envEmail && !envPassword && !envFullName) {
+    return;
+  }
+
+  const adminRow = db
+    .prepare("SELECT id, username, email, full_name FROM users WHERE role = 'ADMIN_CENTRAL' ORDER BY created_at ASC LIMIT 1")
+    .get() as { id: string; username: string; email: string; full_name: string } | undefined;
+
+  if (!adminRow) {
+    const username = envUsername || 'admin.central';
+    const email = envEmail || 'admin@digitalbalance.id';
+    const passwordHash = bcrypt.hashSync(envPassword || crypto.randomBytes(24).toString('hex'), 10);
+    const fullName = envFullName || 'Koordinator Admin Central';
+    db.prepare(
+      `INSERT INTO users (id, username, email, password_hash, full_name, role, school_id, status)
+       VALUES ('usr_admin_central', ?, ?, ?, ?, 'ADMIN_CENTRAL', NULL, 'ACTIVE')`
+    ).run(username, email, passwordHash, fullName);
+    return;
+  }
+
+  const updates: string[] = [];
+  const params: string[] = [];
+  if (envUsername && envUsername !== adminRow.username) {
+    updates.push('username = ?');
+    params.push(envUsername);
+  }
+  if (envEmail && envEmail !== adminRow.email) {
+    updates.push('email = ?');
+    params.push(envEmail);
+  }
+  if (envFullName && envFullName !== adminRow.full_name) {
+    updates.push('full_name = ?');
+    params.push(envFullName);
+  }
+  if (envPassword) {
+    updates.push('password_hash = ?');
+    params.push(bcrypt.hashSync(envPassword, 10));
+  }
+
+  if (updates.length > 0) {
+    updates.push("updated_at = datetime('now')");
+    params.push(adminRow.id);
+    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+  }
 }
 
 function seedInitialSystemData() {
   const userCountRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
   if (userCountRow.cnt === 0) {
-    const adminPass = bcrypt.hashSync('Admin123!', 10);
-    const bkPass = bcrypt.hashSync('GuruBK123!', 10);
-    const studentPass = bcrypt.hashSync('Siswa123!', 10);
+    const initialAdminUsername = process.env.ADMIN_USERNAME?.trim() || 'admin.central';
+    const initialAdminEmail = process.env.ADMIN_EMAIL?.trim() || 'admin@digitalbalance.id';
+    const initialAdminFullName = process.env.ADMIN_FULL_NAME?.trim() || 'Koordinator Admin Central';
+    const initialAdminPass = process.env.ADMIN_PASSWORD?.trim() || 'Admin123!';
+
+    const adminPass = bcrypt.hashSync(initialAdminPass, 10);
+    // Seeded Guru BK & student accounts use private random credentials unless explicitly configured;
+    // Admin Central creates or resets Guru BK credentials inside the dashboard.
+    const bkPass = bcrypt.hashSync(
+      process.env.DEFAULT_BK_PASSWORD?.trim() || crypto.randomBytes(24).toString('hex'),
+      10
+    );
+    const studentPass = bcrypt.hashSync(
+      process.env.DEFAULT_STUDENT_PASSWORD?.trim() || crypto.randomBytes(24).toString('hex'),
+      10
+    );
 
     const adminId = 'usr_admin_central';
     db.prepare(
       `INSERT INTO users (id, username, email, password_hash, full_name, role, school_id, status)
        VALUES (?, ?, ?, ?, ?, 'ADMIN_CENTRAL', NULL, 'ACTIVE')`
-    ).run(adminId, 'admin.central', 'admin@digitalbalance.id', adminPass, 'Koordinator Admin Central');
+    ).run(adminId, initialAdminUsername, initialAdminEmail, adminPass, initialAdminFullName);
 
     // Initial two schools so multi-school isolation can be verified immediately
     const sch1 = 'sch_harapan_01';

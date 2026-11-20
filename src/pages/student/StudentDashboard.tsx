@@ -8,7 +8,7 @@ import {
   Library,
   MessageCircleHeart,
   UserCircle2,
-  Bot,
+  Gamepad2,
   Plus,
   Pencil,
   Trash2,
@@ -41,8 +41,7 @@ import {
   ConfirmModal,
   type NavItem,
 } from '../../components/UiPrimitives.tsx';
-import { GeminiChatPanel } from '../../components/GeminiChatPanel.tsx';
-import { ImageStudioPanel } from '../../components/ImageStudioPanel.tsx';
+import { StudentQuestPanel } from '../../components/StudentQuestPanel.tsx';
 
 const STUDENT_NAV: NavItem[] = [
   { id: 'beranda', label: 'Beranda', icon: Home },
@@ -52,7 +51,7 @@ const STUDENT_NAV: NavItem[] = [
   { id: 'jurnal', label: 'Jurnal Refleksi', icon: BookHeart },
   { id: 'edukasi', label: 'Pustaka Edukasi', icon: Library },
   { id: 'konsultasi', label: 'Hubungi Guru BK', icon: MessageCircleHeart },
-  { id: 'teman-ai', label: 'Teman Refleksi AI', icon: Bot },
+  { id: 'misi-digital', label: 'Misi & Simulasi', icon: Gamepad2 },
   { id: 'profil', label: 'Profil Saya', icon: UserCircle2 },
 ];
 
@@ -130,7 +129,6 @@ export function StudentDashboard({
   const [eduCategoryFilter, setEduCategoryFilter] = useState('');
   const [eduSearch, setEduSearch] = useState('');
   const [activeMaterial, setActiveMaterial] = useState<EducationalMaterial | null>(null);
-  const [showImageStudio, setShowImageStudio] = useState(false);
 
   const [bkTeachers, setBkTeachers] = useState<SchoolBkTeacherItem[]>([]);
   const [consultations, setConsultations] = useState<ConsultationRequest[]>([]);
@@ -583,11 +581,11 @@ export function StudentDashboard({
               </button>
               <button
                 type="button"
-                onClick={() => onSelectTab('teman-ai')}
+                onClick={() => onSelectTab('misi-digital')}
                 className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-medium rounded-lg inline-flex items-center gap-1.5"
               >
-                <Bot className="w-4 h-4 text-violet-700" />
-                <span>Teman Refleksi AI</span>
+                <Gamepad2 className="w-4 h-4 text-violet-700" />
+                <span>Misi &amp; Simulasi</span>
               </button>
             </div>
           </div>
@@ -1269,23 +1267,12 @@ export function StudentDashboard({
       {/* 6. PUSTAKA EDUKASI */}
       {activeTab === 'edukasi' && (
         <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900 font-display">Pustaka Edukasi</h1>
-              <p className="text-sm text-slate-500 mt-0.5">
-                Baca materi ringan seputar literasi media sosial, kontrol diri, dan kesehatan emosional.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowImageStudio((s) => !s)}
-              className="px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-lg self-start"
-            >
-              {showImageStudio ? 'Tutup Studio Ilustrasi' : 'Buat Ilustrasi Papan Motivasi'}
-            </button>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 font-display">Pustaka Edukasi</h1>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Baca materi ringan seputar literasi media sosial, kontrol diri, dan kesehatan emosional.
+            </p>
           </div>
-
-          {showImageStudio && <ImageStudioPanel />}
 
           <div className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50">
@@ -1474,23 +1461,16 @@ export function StudentDashboard({
         </div>
       )}
 
-      {/* 8. TEMAN REFLEKSI AI */}
-      {activeTab === 'teman-ai' && (
+      {/* 8. MISI & SIMULASI DIGITAL */}
+      {activeTab === 'misi-digital' && (
         <div className="space-y-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 font-display">Teman Refleksi AI</h1>
+            <h1 className="text-2xl font-bold text-slate-900 font-display">Misi &amp; Simulasi Digital</h1>
             <p className="text-sm text-slate-500 mt-0.5">
-              Diskusikan cara mengatur waktu layar, mencari strategi belajar fokus, atau merangkai refleksi harianmu.
+              Mainkan simulasi keputusan media sosial, selesaikan misi harian, dan kumpulkan lencana keseimbangan digitalmu.
             </p>
           </div>
-          <GeminiChatPanel
-            userRoleLabel="Peserta Didik"
-            defaultPrompts={[
-              'Bagaimana cara mengurangi kebiasaan scrolling sebelum tidur?',
-              'Bantu aku membuat jadwal belajar 2 jam tanpa terganggu notifikasi ponsel',
-              'Apa pertanyaan refleksi diri yang bagus untuk akhir pekan ini?',
-            ]}
-          />
+          <StudentQuestPanel onGoToConsult={() => onSelectTab('konsultasi')} />
         </div>
       )}
 

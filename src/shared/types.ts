@@ -205,3 +205,14 @@ export interface AuditLog {
   details: string;
   createdAt: string;
 }
+
+export interface FocusSession {
+  id: string;
+  studentId: string;
+  schoolId: string;
+  title: string;
+  durationMinutes: number;
+  sessionDate: string;
+  reflectionNote: string;
+  createdAt: string;
+}

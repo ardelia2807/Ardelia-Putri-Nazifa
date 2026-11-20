@@ -21,7 +21,7 @@ const ROLE_HASH_PREFIX: Record<UserRole, string> = {
 const VALID_TABS: Record<UserRole, string[]> = {
   ADMIN_CENTRAL: ['ringkasan', 'sekolah', 'pengguna', 'data-siswa', 'audit-log', 'laporan', 'panduan'],
   GURU_BK: ['ringkasan', 'peserta-didik', 'cek-diri', 'konsultasi', 'catatan-refleksi', 'laporan', 'profil'],
-  PESERTA_DIDIK: ['beranda', 'cek-diri', 'catatan', 'target', 'jurnal', 'edukasi', 'konsultasi', 'teman-ai', 'profil'],
+  PESERTA_DIDIK: ['beranda', 'cek-diri', 'catatan', 'target', 'jurnal', 'edukasi', 'konsultasi', 'misi-digital', 'profil'],
 };
 
 function parseHash(): { prefix: string; tab: string } {
@@ -155,6 +155,7 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
         onLogout={handleLogout}
+        onUserUpdated={setUser}
         accessNotice={accessNotice}
         onDismissNotice={() => setAccessNotice(null)}
       />

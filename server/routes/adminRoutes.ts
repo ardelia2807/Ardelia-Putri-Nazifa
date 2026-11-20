@@ -1,10 +1,76 @@
 import { Router } from 'express';
 import { db, genId } from '../db.ts';
-import { hashPassword, requireAuth, requireRole, logAudit, type AuthedRequest } from '../auth.ts';
+import {
+  hashPassword,
+  verifyPassword,
+  loadAuthUserById,
+  requireAuth,
+  requireRole,
+  logAudit,
+  type AuthedRequest,
+} from '../auth.ts';
 
 export const adminRoutes = Router();
 
 adminRoutes.use(requireAuth, requireRole('ADMIN_CENTRAL'));
+
+adminRoutes.put('/account', (req: AuthedRequest, res) => {
+  const { fullName, username, email, currentPassword, newPassword } = req.body as {
+    fullName?: string;
+    username?: string;
+    email?: string;
+    currentPassword?: string;
+    newPassword?: string;
+  };
+
+  if (!fullName?.trim() || !username?.trim() || !email?.trim()) {
+    return res.status(400).json({ error: 'Nama lengkap, username, dan email wajib diisi.' });
+  }
+  if (!currentPassword) {
+    return res.status(400).json({ error: 'Masukkan password saat ini untuk mengonfirmasi perubahan akun Admin.' });
+  }
+  if (newPassword && newPassword.trim().length < 6) {
+    return res.status(400).json({ error: 'Password baru minimal terdiri dari 6 karakter.' });
+  }
+
+  const adminRow = db
+    .prepare('SELECT id, password_hash FROM users WHERE id = ?')
+    .get(req.authUser!.id) as { id: string; password_hash: string } | undefined;
+
+  if (!adminRow || !verifyPassword(currentPassword, adminRow.password_hash)) {
+    return res.status(400).json({ error: 'Password saat ini tidak sesuai.' });
+  }
+
+  const dup = db
+    .prepare('SELECT id FROM users WHERE (LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)) AND id != ?')
+    .get(username.trim(), email.trim(), req.authUser!.id);
+  if (dup) {
+    return res.status(409).json({ error: 'Username atau email sudah digunakan oleh akun lain.' });
+  }
+
+  if (newPassword?.trim()) {
+    db.prepare(
+      `UPDATE users SET full_name = ?, username = ?, email = ?, password_hash = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(fullName.trim(), username.trim(), email.trim(), hashPassword(newPassword.trim()), req.authUser!.id);
+  } else {
+    db.prepare(
+      `UPDATE users SET full_name = ?, username = ?, email = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(fullName.trim(), username.trim(), email.trim(), req.authUser!.id);
+  }
+
+  const updatedUser = loadAuthUserById(req.authUser!.id);
+  logAudit({
+    userId: req.authUser!.id,
+    username: username.trim(),
+    userRole: 'ADMIN_CENTRAL',
+    action: 'UPDATE_ADMIN_ACCOUNT',
+    entityType: 'USER',
+    entityId: req.authUser!.id,
+    details: `Admin Central memperbarui kredensial akun (${username.trim()}).`,
+  });
+
+  res.json({ ok: true, user: updatedUser });
+});
 
 adminRoutes.get('/overview', (_req, res) => {
   const totalSchools = (db.prepare('SELECT COUNT(*) as c FROM schools').get() as { c: number }).c;
