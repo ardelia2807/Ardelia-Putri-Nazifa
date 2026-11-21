@@ -16,6 +16,8 @@ interface PublicSchoolOption {
   id: string;
   name: string;
   level: string;
+  npsn?: string;
+  code?: string;
 }
 
 interface PublicClassOption {
@@ -25,8 +27,27 @@ interface PublicClassOption {
   gradeLevel: string;
 }
 
+function getSchoolCodeFromUrl(): string {
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    const fromSearch = searchParams.get('s')?.trim();
+    if (fromSearch) return fromSearch.toUpperCase();
+
+    const rawHash = window.location.hash || '';
+    const match = rawHash.match(/[?#&]?s=([^&/]+)/i);
+    if (match?.[1]) return decodeURIComponent(match[1]).trim().toUpperCase();
+  } catch {
+    // ignore URL parse issues
+  }
+  return '';
+}
+
 export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (user: AuthUser) => void }) {
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const initialSchoolParam = useMemo(() => getSchoolCodeFromUrl(), []);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>(() =>
+    initialSchoolParam ? 'register' : 'login'
+  );
+  const [linkedSchoolName, setLinkedSchoolName] = useState<string | null>(null);
 
   // Login State
   const [identifier, setIdentifier] = useState('');
@@ -66,24 +87,37 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (user: AuthUser)
   const [forgotError, setForgotError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (authMode !== 'register' || schools.length > 0) return;
+    if ((authMode !== 'register' && !initialSchoolParam) || schools.length > 0) return;
     setSchoolsLoading(true);
     apiFetch<{ schools: PublicSchoolOption[]; classes: PublicClassOption[] }>('/api/auth/public-schools')
       .then((res) => {
         setSchools(res.schools);
         setClasses(res.classes);
         if (res.schools.length > 0) {
-          setRegForm((prev) => ({
-            ...prev,
-            schoolId: prev.schoolId || res.schools[0].id,
-          }));
+          const matched = initialSchoolParam
+            ? res.schools.find(
+                (s) =>
+                  s.code?.toUpperCase() === initialSchoolParam ||
+                  s.npsn?.toUpperCase() === initialSchoolParam ||
+                  s.id.toUpperCase() === initialSchoolParam
+              )
+            : undefined;
+          if (matched) {
+            setLinkedSchoolName(matched.name);
+            setRegForm((prev) => ({ ...prev, schoolId: matched.id, classId: '' }));
+          } else {
+            setRegForm((prev) => ({
+              ...prev,
+              schoolId: prev.schoolId || res.schools[0].id,
+            }));
+          }
         }
       })
       .catch((err) => {
         setRegError(err instanceof Error ? err.message : 'Gagal memuat daftar sekolah.');
       })
       .finally(() => setSchoolsLoading(false));
-  }, [authMode, schools.length]);
+  }, [authMode, schools.length, initialSchoolParam]);
 
   const schoolClasses = useMemo(
     () => classes.filter((c) => c.schoolId === regForm.schoolId),
@@ -385,6 +419,15 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (user: AuthUser)
                     Pilih peran pendaftaran untuk Peserta Didik atau Guru BK sesuai sekolah Anda.
                   </p>
                 </div>
+
+                {linkedSchoolName && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                    <span>
+                      Terhubung ke tautan sekolah <span className="font-semibold">{linkedSchoolName}</span>. Lengkapi data di bawah untuk langsung tergabung dengan sekolah ini.
+                    </span>
+                  </div>
+                )}
 
                 {/* Role Selector */}
                 <div className="grid grid-cols-2 gap-2">

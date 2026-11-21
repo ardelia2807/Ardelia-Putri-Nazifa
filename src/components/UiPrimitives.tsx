@@ -119,12 +119,14 @@ export function Modal({
   open,
   onClose,
   title,
+  customHeader,
   children,
   maxWidth = 'max-w-lg',
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  customHeader?: React.ReactNode;
   children: React.ReactNode;
   maxWidth?: string;
 }) {
@@ -146,19 +148,23 @@ export function Modal({
       aria-modal="true"
       aria-label={title}
     >
-      <div className={`bg-white border border-slate-200 rounded-xl w-full ${maxWidth} shadow-xl my-8`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+      <div className={`bg-white border border-slate-200 rounded-2xl w-full ${maxWidth} shadow-xl my-8`}>
+        <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-slate-200">
+          {customHeader ? (
+            <div className="flex-1 min-w-0">{customHeader}</div>
+          ) : (
+            <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+          )}
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-violet-600"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-violet-600 shrink-0"
             aria-label="Tutup dialog"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="p-6 max-h-[80vh] overflow-y-auto">{children}</div>
+        <div className="p-6 max-h-[82vh] overflow-y-auto">{children}</div>
       </div>
     </div>
   );

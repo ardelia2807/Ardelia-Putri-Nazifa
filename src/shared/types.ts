@@ -26,6 +26,7 @@ export interface AuthUser {
 
 export interface School {
   id: string;
+  code?: string;
   name: string;
   npsn: string;
   level: string;
@@ -38,7 +39,11 @@ export interface School {
   bkCount?: number;
   studentCount?: number;
   assessmentCount?: number;
+  journalCount?: number;
   consultationCount?: number;
+  consultationDoneCount?: number;
+  reflectionCount?: number;
+  reflection30dCount?: number;
 }
 
 export interface SchoolClass {

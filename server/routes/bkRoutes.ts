@@ -253,6 +253,42 @@ bkRoutes.post('/students/:id/reset-password', (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
+bkRoutes.delete('/students/:id', (req: AuthedRequest, res) => {
+  const schoolId = getSchoolId(req);
+  const existing = db
+    .prepare(
+      `SELECT st.id, st.user_id, st.school_id, u.full_name, u.username
+       FROM students st
+       JOIN users u ON st.user_id = u.id
+       WHERE st.id = ?`
+    )
+    .get(req.params.id) as
+    | { id: string; user_id: string; school_id: string; full_name: string; username: string }
+    | undefined;
+
+  if (!existing) {
+    return res.status(404).json({ error: 'Peserta didik tidak ditemukan.' });
+  }
+  if (existing.school_id !== schoolId) {
+    return res.status(403).json({ error: 'Akses ditolak: Peserta didik berasal dari sekolah lain.' });
+  }
+
+  db.prepare('DELETE FROM users WHERE id = ?').run(existing.user_id);
+
+  logAudit({
+    userId: req.authUser!.id,
+    username: req.authUser!.username,
+    userRole: req.authUser!.role,
+    schoolId,
+    action: 'BK_DELETE_STUDENT',
+    entityType: 'STUDENT',
+    entityId: existing.id,
+    details: `Guru BK menghapus akun Peserta Didik "${existing.full_name}" (${existing.username}).`,
+  });
+
+  res.json({ ok: true });
+});
+
 bkRoutes.get('/assessments', (req: AuthedRequest, res) => {
   const schoolId = getSchoolId(req);
 

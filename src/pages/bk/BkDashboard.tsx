@@ -16,8 +16,9 @@ import {
   Printer,
   Info,
   Lock,
+  Trash2,
 } from 'lucide-react';
-import { apiFetch, downloadCsv } from '../../lib/api.ts';
+import { apiFetch, downloadCsv, formatLocalDateTime, formatLocalDate } from '../../lib/api.ts';
 import type {
   AuthUser,
   StudentRecord,
@@ -31,6 +32,7 @@ import {
   StatusLabel,
   SimpleBarChart,
   Modal,
+  ConfirmModal,
   type NavItem,
 } from '../../components/UiPrimitives.tsx';
 
@@ -148,6 +150,9 @@ export function BkDashboard({
   const [resetTarget, setResetTarget] = useState<StudentRecord | null>(null);
   const [resetPassValue, setResetPassValue] = useState('');
 
+  // Delete Student Confirm Modal
+  const [deleteStudentTarget, setDeleteStudentTarget] = useState<StudentRecord | null>(null);
+
   // Consultation Response Modal
   const [activeConsult, setActiveConsult] = useState<ConsultationRequest | null>(null);
   const [consultResponseForm, setConsultResponseForm] = useState({
@@ -216,7 +221,7 @@ export function BkDashboard({
     run();
   }, [activeTab, loadOverview, loadStudents, loadAssessments, loadConsultations, loadSharedJournals, loadReport]);
 
-  function openAddStudent() {
+  function openAddStudent(prefillClassId = '') {
     setEditingStudent(null);
     setStudentForm({
       fullName: '',
@@ -225,7 +230,7 @@ export function BkDashboard({
       email: '',
       username: '',
       password: '',
-      classId: classes[0]?.id || '',
+      classId: prefillClassId || studentClassFilter || classes[0]?.id || '',
       status: 'ACTIVE',
     });
     setStudentModalOpen(true);
@@ -298,6 +303,18 @@ export function BkDashboard({
       setResetPassValue('');
     } catch (err) {
       setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal mereset password.' });
+    }
+  }
+
+  async function confirmDeleteStudent() {
+    if (!deleteStudentTarget) return;
+    try {
+      await apiFetch(`/api/bk/students/${deleteStudentTarget.id}`, { method: 'DELETE' });
+      setFeedback({ type: 'ok', text: `Akun Peserta Didik "${deleteStudentTarget.fullName}" berhasil dihapus.` });
+      setDeleteStudentTarget(null);
+      await loadStudents();
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal menghapus peserta didik.' });
     }
   }
 
@@ -440,7 +457,7 @@ export function BkDashboard({
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-slate-900 truncate">{c.topic}</div>
                           <div className="text-xs text-slate-500">
-                            {c.studentName} · {c.className} · {c.createdAt.slice(0, 10)}
+                            {c.studentName} · {c.className} · {formatLocalDate(c.createdAt)}
                           </div>
                         </div>
                         <StatusLabel status={c.status} />
@@ -480,7 +497,7 @@ export function BkDashboard({
               </button>
               <button
                 type="button"
-                onClick={openAddStudent}
+                onClick={() => openAddStudent()}
                 className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
@@ -514,65 +531,137 @@ export function BkDashboard({
             </select>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                  <tr>
-                    <th className="text-left px-5 py-3 font-medium">Nama Lengkap</th>
-                    <th className="text-left px-4 py-3 font-medium">NIS / NISN</th>
-                    <th className="text-left px-4 py-3 font-medium">Kelas</th>
-                    <th className="text-left px-4 py-3 font-medium">Username</th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
-                    <th className="text-right px-5 py-3 font-medium">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {students.map((st) => (
-                    <tr key={st.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-3">
-                        <div className="font-medium text-slate-900">{st.fullName}</div>
-                        <div className="text-xs text-slate-500">{st.email}</div>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.nisNisn}</td>
-                      <td className="px-4 py-3 text-slate-700">{st.className}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.username}</td>
-                      <td className="px-4 py-3">
-                        <StatusLabel status={st.status} />
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => openEditStudent(st)}
-                            className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md"
-                            title="Edit Siswa"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setResetTarget(st)}
-                            className="p-1.5 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-md"
-                            title="Reset Password Siswa"
-                          >
-                            <KeyRound className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {!students.length && (
-                    <tr>
-                      <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
-                        Belum ada peserta didik di sekolah ini atau sesuai filter.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {(() => {
+            const visibleClasses = studentClassFilter
+              ? classes.filter((c) => c.id === studentClassFilter)
+              : classes;
+            const unassignedStudents = !studentClassFilter ? students.filter((st) => !st.classId) : [];
+            const classGroups: Array<{
+              key: string;
+              classId: string;
+              title: string;
+              subtitle: string;
+              items: StudentRecord[];
+            }> = visibleClasses
+              .map((c) => ({
+                key: c.id,
+                classId: c.id,
+                title: `Kelas ${c.name}`,
+                subtitle: `Tingkat ${c.gradeLevel} · ${c.academicYear}`,
+                items: students.filter((st) => st.classId === c.id),
+              }))
+              .filter((g) => !studentSearch.trim() || g.items.length > 0);
+
+            if (unassignedStudents.length > 0) {
+              classGroups.push({
+                key: '__unassigned__',
+                classId: '',
+                title: 'Belum Ditempatkan di Kelas',
+                subtitle: 'Siswa tanpa penetapan kelas',
+                items: unassignedStudents,
+              });
+            }
+
+            if (!classGroups.length) {
+              return (
+                <div className="bg-white border border-slate-200 rounded-xl px-5 py-10 text-center text-sm text-slate-500">
+                  Belum ada peserta didik di sekolah ini atau sesuai filter.
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-5">
+                {classGroups.map((group) => (
+                  <div key={group.key} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900">{group.title}</h2>
+                        <p className="text-xs text-slate-500">
+                          {group.subtitle} ·{' '}
+                          <span className="font-mono font-semibold text-slate-700">{group.items.length}</span> peserta didik
+                        </p>
+                      </div>
+                      {group.classId && (
+                        <button
+                          type="button"
+                          onClick={() => openAddStudent(group.classId)}
+                          className="text-xs font-semibold text-violet-700 hover:underline inline-flex items-center gap-1 self-start sm:self-auto"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Tambah Siswa ke {group.title}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-white text-xs text-slate-500 border-b border-slate-100">
+                          <tr>
+                            <th className="text-left px-5 py-2.5 font-medium">Nama Lengkap</th>
+                            <th className="text-left px-4 py-2.5 font-medium">NIS / NISN</th>
+                            <th className="text-left px-4 py-2.5 font-medium">Username</th>
+                            <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                            <th className="text-right px-5 py-2.5 font-medium">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {group.items.map((st) => (
+                            <tr key={st.id} className="hover:bg-slate-50">
+                              <td className="px-5 py-3">
+                                <div className="font-medium text-slate-900">{st.fullName}</div>
+                                <div className="text-xs text-slate-500">{st.email}</div>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.nisNisn}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.username}</td>
+                              <td className="px-4 py-3">
+                                <StatusLabel status={st.status} />
+                              </td>
+                              <td className="px-5 py-3 text-right">
+                                <div className="inline-flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditStudent(st)}
+                                    className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md"
+                                    title="Edit Siswa"
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setResetTarget(st)}
+                                    className="p-1.5 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-md"
+                                    title="Reset Password Siswa"
+                                  >
+                                    <KeyRound className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeleteStudentTarget(st)}
+                                    className="p-1.5 text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded-md"
+                                    title="Hapus Peserta Didik"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {!group.items.length && (
+                            <tr>
+                              <td colSpan={5} className="px-5 py-5 text-center text-xs text-slate-500">
+                                Belum ada peserta didik terdaftar di {group.title}.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -689,7 +778,7 @@ export function BkDashboard({
                   <div>
                     <div className="text-base font-semibold text-slate-900">{c.topic}</div>
                     <div className="text-xs text-slate-500 mt-0.5">
-                      {c.studentName} · Kelas {c.className} · Diajukan {c.createdAt.slice(0, 10)} · Guru BK tujuan: {c.bkTeacherName}
+                      {c.studentName} · Kelas {c.className} · Diajukan {formatLocalDate(c.createdAt)} · Guru BK tujuan: {c.bkTeacherName}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -720,7 +809,7 @@ export function BkDashboard({
                     {c.responses.map((r) => (
                       <div key={r.id} className="p-3 bg-violet-50/70 border border-violet-200/70 rounded-lg text-xs space-y-1">
                         <div className="font-semibold text-violet-900">
-                          {r.responderName} · <span className="font-mono font-normal">{r.createdAt.slice(0, 16)}</span>
+                          {r.responderName} · <span className="font-mono font-normal">{formatLocalDateTime(r.createdAt, false)}</span>
                         </div>
                         <p className="text-slate-800">{r.responseText}</p>
                         {r.scheduleNote && <p className="text-violet-700 font-medium">Catatan jadwal: {r.scheduleNote}</p>}
@@ -1155,6 +1244,14 @@ export function BkDashboard({
           </div>
         </form>
       </Modal>
+
+      <ConfirmModal
+        open={Boolean(deleteStudentTarget)}
+        onClose={() => setDeleteStudentTarget(null)}
+        onConfirm={confirmDeleteStudent}
+        title="Konfirmasi Hapus Peserta Didik"
+        message={`Menghapus akun "${deleteStudentTarget?.fullName}" (${deleteStudentTarget?.nisNisn}) akan menghapus akun beserta seluruh data aktivitas dan konsultasinya secara permanen. Lanjutkan?`}
+      />
     </DashboardShell>
   );
 }

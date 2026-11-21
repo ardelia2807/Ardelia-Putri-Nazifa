@@ -20,7 +20,7 @@ import {
   ChevronRight,
   Info,
 } from 'lucide-react';
-import { apiFetch } from '../../lib/api.ts';
+import { apiFetch, formatLocalDateTime, formatLocalDate } from '../../lib/api.ts';
 import type {
   AuthUser,
   AssessmentQuestion,
@@ -930,7 +930,7 @@ export function StudentDashboard({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-semibold text-slate-900">{a.category}</div>
-                      <div className="text-xs text-slate-500 font-mono">{a.createdAt.slice(0, 16)}</div>
+                      <div className="text-xs text-slate-500 font-mono">{formatLocalDateTime(a.createdAt, false)}</div>
                     </div>
                     <div className="text-sm font-bold font-mono tabular-nums text-violet-700">
                       {a.totalScore} / {a.maxScore}
@@ -1428,7 +1428,7 @@ export function StudentDashboard({
                     <div>
                       <div className="font-semibold text-slate-900">{c.topic}</div>
                       <div className="text-xs text-slate-500">
-                        Kepada {c.bkTeacherName} · {c.createdAt.slice(0, 10)}
+                        Kepada {c.bkTeacherName} · {formatLocalDate(c.createdAt)}
                       </div>
                     </div>
                     <StatusLabel status={c.status} />

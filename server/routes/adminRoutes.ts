@@ -72,62 +72,219 @@ adminRoutes.put('/account', (req: AuthedRequest, res) => {
   res.json({ ok: true, user: updatedUser });
 });
 
-adminRoutes.get('/overview', (_req, res) => {
-  const totalSchools = (db.prepare('SELECT COUNT(*) as c FROM schools').get() as { c: number }).c;
-  const activeSchools = (db.prepare("SELECT COUNT(*) as c FROM schools WHERE status = 'ACTIVE'").get() as { c: number }).c;
-  const totalBkTeachers = (db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'GURU_BK'").get() as { c: number }).c;
-  const totalStudents = (db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'PESERTA_DIDIK'").get() as { c: number }).c;
-  const activeAccounts = (db.prepare("SELECT COUNT(*) as c FROM users WHERE status = 'ACTIVE'").get() as { c: number }).c;
-  const totalConsultations = (db.prepare('SELECT COUNT(*) as c FROM consultation_requests').get() as { c: number }).c;
-  const totalAssessments = (db.prepare('SELECT COUNT(*) as c FROM self_assessments').get() as { c: number }).c;
-  const totalUsageRecords = (db.prepare('SELECT COUNT(*) as c FROM usage_records').get() as { c: number }).c;
-  const totalTargets = (db.prepare('SELECT COUNT(*) as c FROM targets').get() as { c: number }).c;
-  const totalJournals = (db.prepare('SELECT COUNT(*) as c FROM reflection_journals').get() as { c: number }).c;
+adminRoutes.get('/overview', (req, res) => {
+  const schoolId = ((req.query.schoolId as string) ?? '').trim();
+
+  const schoolsList = db
+    .prepare('SELECT id, name, level, status FROM schools ORDER BY name ASC')
+    .all() as Array<{ id: string; name: string; level: string; status: string }>;
+
+  const totalSchools = (
+    db
+      .prepare('SELECT COUNT(*) as c FROM schools WHERE (? = \'\' OR id = ?)')
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const activeSchools = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM schools WHERE status = 'ACTIVE' AND (? = '' OR id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const totalClasses = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM classes WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const totalBkTeachers = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM users WHERE role = 'GURU_BK' AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const activeBkTeachers = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM users WHERE role = 'GURU_BK' AND status = 'ACTIVE' AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const totalStudents = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM users WHERE role = 'PESERTA_DIDIK' AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const activeAccounts = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM users WHERE status = 'ACTIVE' AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+
+  const assessedStudents = (
+    db
+      .prepare("SELECT COUNT(DISTINCT student_id) as c FROM self_assessments WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const assessmentCompletionPct = totalStudents > 0 ? Math.round((assessedStudents / totalStudents) * 100) : 0;
+
+  const totalAssessments = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM self_assessments WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const avgScoreRow = db
+    .prepare("SELECT ROUND(AVG(total_score), 1) as avgScore FROM self_assessments WHERE (? = '' OR school_id = ?)")
+    .get(schoolId, schoolId) as { avgScore: number | null };
+  const avgAssessmentScore = avgScoreRow?.avgScore ?? 0;
+
+  const attentionAlerts = (
+    db
+      .prepare(
+        `SELECT COUNT(*) as c FROM self_assessments
+         WHERE category IN ('Perlu Penguatan Kontrol Diri', 'Perlu Pendampingan Reflektif')
+           AND (? = '' OR school_id = ?)`
+      )
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+
+  const totalConsultations = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM consultation_requests WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const pendingConsultations = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM consultation_requests WHERE status IN ('MENUNGGU', 'DIPROSES') AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const doneConsultations = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM consultation_requests WHERE status = 'SELESAI' AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+
+  const totalUsageRecords = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM usage_records WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const totalTargets = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM targets WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const completedTargets = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM targets WHERE status = 'SELESAI' AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const targetCompletionPct = totalTargets > 0 ? Math.round((completedTargets / totalTargets) * 100) : 0;
+
+  const totalJournals = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM reflection_journals WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const sharedJournals = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM reflection_journals WHERE shared_with_bk = 1 AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const totalFocusSessions = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM focus_sessions WHERE (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
 
   const schoolDistribution = db
     .prepare(
-      `SELECT s.id, s.name, s.level, s.status,
+      `SELECT s.id, s.name, s.level, s.address, s.status,
+              CASE WHEN instr(s.created_at, 'T') = 0 THEN replace(s.created_at, ' ', 'T') || 'Z' ELSE s.created_at END as createdAt,
               (SELECT COUNT(*) FROM bk_teachers bt WHERE bt.school_id = s.id) as bkCount,
               (SELECT COUNT(*) FROM students st WHERE st.school_id = s.id) as studentCount,
+              ((SELECT COUNT(*) FROM bk_teachers bt WHERE bt.school_id = s.id) +
+               (SELECT COUNT(*) FROM students st WHERE st.school_id = s.id)) as userCount,
+              (SELECT COUNT(*) FROM classes c WHERE c.school_id = s.id) as classCount,
               (SELECT COUNT(*) FROM self_assessments sa WHERE sa.school_id = s.id) as assessmentCount,
-              (SELECT COUNT(*) FROM consultation_requests cr WHERE cr.school_id = s.id) as consultationCount
+              (SELECT COUNT(*) FROM consultation_requests cr WHERE cr.school_id = s.id) as consultationCount,
+              ((SELECT COUNT(*) FROM self_assessments sa WHERE sa.school_id = s.id AND sa.category IN ('Perlu Penguatan Kontrol Diri', 'Perlu Pendampingan Reflektif')) +
+               (SELECT COUNT(*) FROM consultation_requests cr WHERE cr.school_id = s.id AND cr.status IN ('MENUNGGU', 'DIPROSES'))) as alertCount
        FROM schools s
+       WHERE (? = '' OR s.id = ?)
        ORDER BY studentCount DESC, s.name ASC`
     )
-    .all();
+    .all(schoolId, schoolId);
 
   const recentAuditLogs = db
     .prepare(
-      `SELECT id, username, user_role as userRole, action, entity_type as entityType, details, created_at as createdAt
+      `SELECT id, username, user_role as userRole, action, entity_type as entityType, details,
+              CASE WHEN instr(created_at, 'T') = 0 THEN replace(created_at, ' ', 'T') || 'Z' ELSE created_at END as createdAt
        FROM audit_logs
+       WHERE (? = '' OR school_id = ?)
        ORDER BY created_at DESC
        LIMIT 8`
     )
-    .all();
+    .all(schoolId, schoolId);
 
-  const activityTrend = db
+  // Build continuous 7-day calendar window ending today (UTC date)
+  const rawTrendRows = db
     .prepare(
       `SELECT substr(created_at, 1, 10) as day, COUNT(*) as count
        FROM audit_logs
-       GROUP BY substr(created_at, 1, 10)
-       ORDER BY day DESC
-       LIMIT 7`
+       WHERE created_at >= date('now', '-6 days')
+         AND (? = '' OR school_id = ?)
+       GROUP BY substr(created_at, 1, 10)`
     )
-    .all()
-    .reverse();
+    .all(schoolId, schoolId) as Array<{ day: string; count: number }>;
+
+  const trendMap = new Map(rawTrendRows.map((r) => [r.day, r.count]));
+  const activityTrend: Array<{ day: string; count: number }> = [];
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10);
+    activityTrend.push({ day: d, count: trendMap.get(d) ?? 0 });
+  }
+
+  const activity7dAssessments = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM self_assessments WHERE created_at >= datetime('now', '-7 days') AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const activity7dJournals = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM reflection_journals WHERE created_at >= datetime('now', '-7 days') AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const activity7dUsage = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM usage_records WHERE created_at >= datetime('now', '-7 days') AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
+  const activity7dConsultations = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM consultation_requests WHERE created_at >= datetime('now', '-7 days') AND (? = '' OR school_id = ?)")
+      .get(schoolId, schoolId) as { c: number }
+  ).c;
 
   res.json({
+    schoolsList,
     stats: {
       totalSchools,
       activeSchools,
+      totalClasses,
       totalBkTeachers,
+      activeBkTeachers,
       totalStudents,
+      assessedStudents,
+      assessmentCompletionPct,
       activeAccounts,
       totalConsultations,
+      pendingConsultations,
+      doneConsultations,
+      attentionAlerts,
       totalAssessments,
+      avgAssessmentScore,
       totalUsageRecords,
       totalTargets,
+      completedTargets,
+      targetCompletionPct,
       totalJournals,
+      sharedJournals,
+      totalFocusSessions,
     },
     featureUsage: [
       { label: 'Cek Diri', count: totalAssessments },
@@ -138,9 +295,27 @@ adminRoutes.get('/overview', (_req, res) => {
     ],
     schoolDistribution,
     activityTrend,
+    activity7dBreakdown: {
+      assessments: activity7dAssessments,
+      journals: activity7dJournals,
+      usageRecords: activity7dUsage,
+      consultations: activity7dConsultations,
+      totalEvents: activityTrend.reduce((acc, item) => acc + item.count, 0),
+    },
     recentAuditLogs,
   });
 });
+
+export function buildSchoolCode(name: string, npsn: string): string {
+  const slug = name
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 24)
+    .replace(/-$/g, '');
+  return slug || `SCH-${npsn}`;
+}
 
 // --- SCHOOLS ---
 adminRoutes.get('/schools', (req, res) => {
@@ -149,17 +324,30 @@ adminRoutes.get('/schools', (req, res) => {
   const rows = db
     .prepare(
       `SELECT s.id, s.name, s.npsn, s.level, s.address, s.email, s.phone, s.status,
-              s.created_at as createdAt, s.updated_at as updatedAt,
+              CASE WHEN instr(s.created_at, 'T') = 0 THEN replace(s.created_at, ' ', 'T') || 'Z' ELSE s.created_at END as createdAt,
+              CASE WHEN instr(s.updated_at, 'T') = 0 THEN replace(s.updated_at, ' ', 'T') || 'Z' ELSE s.updated_at END as updatedAt,
               (SELECT COUNT(*) FROM bk_teachers bt WHERE bt.school_id = s.id) as bkCount,
               (SELECT COUNT(*) FROM students st WHERE st.school_id = s.id) as studentCount,
               (SELECT COUNT(*) FROM self_assessments sa WHERE sa.school_id = s.id) as assessmentCount,
-              (SELECT COUNT(*) FROM consultation_requests cr WHERE cr.school_id = s.id) as consultationCount
+              (SELECT COUNT(*) FROM reflection_journals rj WHERE rj.school_id = s.id) as journalCount,
+              (SELECT COUNT(*) FROM consultation_requests cr WHERE cr.school_id = s.id) as consultationCount,
+              (SELECT COUNT(*) FROM consultation_requests cr WHERE cr.school_id = s.id AND cr.status = 'SELESAI') as consultationDoneCount,
+              ((SELECT COUNT(*) FROM reflection_journals rj WHERE rj.school_id = s.id) +
+               (SELECT COUNT(*) FROM self_assessments sa WHERE sa.school_id = s.id)) as reflectionCount,
+              ((SELECT COUNT(*) FROM reflection_journals rj WHERE rj.school_id = s.id AND rj.created_at >= datetime('now', '-30 days')) +
+               (SELECT COUNT(*) FROM self_assessments sa WHERE sa.school_id = s.id AND sa.created_at >= datetime('now', '-30 days'))) as reflection30dCount
        FROM schools s
-       WHERE (? = '' OR s.name LIKE ? OR s.npsn LIKE ?)
+       WHERE (? = '' OR s.name LIKE ? OR s.npsn LIKE ? OR s.address LIKE ?)
        ORDER BY s.created_at DESC`
     )
-    .all(q, like, like);
-  res.json({ schools: rows });
+    .all(q, like, like, like) as Array<Record<string, unknown> & { name: string; npsn: string }>;
+
+  res.json({
+    schools: rows.map((row) => ({
+      ...row,
+      code: buildSchoolCode(row.name, row.npsn),
+    })),
+  });
 });
 
 adminRoutes.post('/schools', (req: AuthedRequest, res) => {
@@ -216,10 +404,11 @@ adminRoutes.get('/schools/:id', (req, res) => {
   const school = db
     .prepare(
       `SELECT id, name, npsn, level, address, email, phone, status,
-              created_at as createdAt, updated_at as updatedAt
+              CASE WHEN instr(created_at, 'T') = 0 THEN replace(created_at, ' ', 'T') || 'Z' ELSE created_at END as createdAt,
+              CASE WHEN instr(updated_at, 'T') = 0 THEN replace(updated_at, ' ', 'T') || 'Z' ELSE updated_at END as updatedAt
        FROM schools WHERE id = ?`
     )
-    .get(req.params.id) as Record<string, unknown> | undefined;
+    .get(req.params.id) as (Record<string, unknown> & { name: string; npsn: string }) | undefined;
 
   if (!school) {
     return res.status(404).json({ error: 'Sekolah tidak ditemukan.' });
@@ -258,17 +447,32 @@ adminRoutes.get('/schools/:id', (req, res) => {
     )
     .all(req.params.id);
 
+  const assessmentCount = (db.prepare('SELECT COUNT(*) as c FROM self_assessments WHERE school_id = ?').get(req.params.id) as { c: number }).c;
+  const journalCount = (db.prepare('SELECT COUNT(*) as c FROM reflection_journals WHERE school_id = ?').get(req.params.id) as { c: number }).c;
+  const reflection30dCount =
+    (db.prepare("SELECT COUNT(*) as c FROM reflection_journals WHERE school_id = ? AND created_at >= datetime('now', '-30 days')").get(req.params.id) as { c: number }).c +
+    (db.prepare("SELECT COUNT(*) as c FROM self_assessments WHERE school_id = ? AND created_at >= datetime('now', '-30 days')").get(req.params.id) as { c: number }).c;
+
   const stats = {
     bkCount: bkTeachers.length,
     studentCount: students.length,
-    assessmentCount: (db.prepare('SELECT COUNT(*) as c FROM self_assessments WHERE school_id = ?').get(req.params.id) as { c: number }).c,
+    assessmentCount,
+    journalCount,
+    reflectionCount: assessmentCount + journalCount,
+    reflection30dCount,
     usageRecordCount: (db.prepare('SELECT COUNT(*) as c FROM usage_records WHERE school_id = ?').get(req.params.id) as { c: number }).c,
     targetCount: (db.prepare('SELECT COUNT(*) as c FROM targets WHERE school_id = ?').get(req.params.id) as { c: number }).c,
     consultationTotal: (db.prepare('SELECT COUNT(*) as c FROM consultation_requests WHERE school_id = ?').get(req.params.id) as { c: number }).c,
     consultationDone: (db.prepare("SELECT COUNT(*) as c FROM consultation_requests WHERE school_id = ? AND status = 'SELESAI'").get(req.params.id) as { c: number }).c,
   };
 
-  res.json({ school, classes, bkTeachers, students, stats });
+  res.json({
+    school: { ...school, code: buildSchoolCode(school.name, school.npsn) },
+    classes,
+    bkTeachers,
+    students,
+    stats,
+  });
 });
 
 adminRoutes.put('/schools/:id', (req: AuthedRequest, res) => {
@@ -560,16 +764,20 @@ adminRoutes.get('/users', (req, res) => {
     .prepare(
       `SELECT u.id, u.full_name as fullName, u.username, u.email, u.role, u.school_id as schoolId,
               COALESCE(s.name, 'Pusat Sistem') as schoolName,
+              s.level as schoolLevel,
               u.status, u.created_at as createdAt,
-              bt.id as bkTeacherId, st.id as studentId
+              bt.id as bkTeacherId, st.id as studentId,
+              st.nis_nisn as nisNisn,
+              COALESCE(c.name, 'Belum Ada Kelas') as className
        FROM users u
        LEFT JOIN schools s ON u.school_id = s.id
        LEFT JOIN bk_teachers bt ON bt.user_id = u.id
        LEFT JOIN students st ON st.user_id = u.id
+       LEFT JOIN classes c ON st.class_id = c.id
        WHERE (? = '' OR u.role = ?)
          AND (? = '' OR u.school_id = ?)
          AND (? = '' OR u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)
-       ORDER BY u.created_at DESC`
+       ORDER BY s.name ASC, u.role ASC, c.name ASC, u.full_name ASC`
     )
     .all(role, role, schoolId, schoolId, q, like, like, like);
 
@@ -627,6 +835,37 @@ adminRoutes.post('/users/:id/reset-password', (req: AuthedRequest, res) => {
     entityType: 'USER',
     entityId: user.id,
     details: `Mereset password akun "${user.username}" (${user.role}).`,
+  });
+
+  res.json({ ok: true });
+});
+
+adminRoutes.delete('/users/:id', (req: AuthedRequest, res) => {
+  if (req.params.id === req.authUser!.id) {
+    return res.status(400).json({ error: 'Anda tidak dapat menghapus akun Anda sendiri.' });
+  }
+  const user = db
+    .prepare('SELECT id, username, full_name, role, school_id FROM users WHERE id = ?')
+    .get(req.params.id) as
+    | { id: string; username: string; full_name: string; role: string; school_id: string | null }
+    | undefined;
+
+  if (!user) return res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
+  if (user.role === 'ADMIN_CENTRAL') {
+    return res.status(403).json({ error: 'Akun Admin Central tidak dapat dihapus.' });
+  }
+
+  db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+
+  logAudit({
+    userId: req.authUser!.id,
+    username: req.authUser!.username,
+    userRole: req.authUser!.role,
+    schoolId: user.school_id,
+    action: 'DELETE_USER',
+    entityType: 'USER',
+    entityId: user.id,
+    details: `Menghapus akun ${user.role} "${user.full_name}" (${user.username}).`,
   });
 
   res.json({ ok: true });
@@ -788,7 +1027,8 @@ adminRoutes.get('/audit-logs', (req, res) => {
   const logs = db
     .prepare(
       `SELECT a.id, a.user_id as userId, a.username, a.user_role as userRole, a.school_id as schoolId,
-              a.action, a.entity_type as entityType, a.entity_id as entityId, a.details, a.created_at as createdAt
+              a.action, a.entity_type as entityType, a.entity_id as entityId, a.details,
+              CASE WHEN instr(a.created_at, 'T') = 0 THEN replace(a.created_at, ' ', 'T') || 'Z' ELSE a.created_at END as createdAt
        FROM audit_logs a
        WHERE (? = '' OR a.user_role = ?)
          AND (? = '' OR a.username LIKE ? OR a.action LIKE ? OR a.details LIKE ?)
@@ -798,6 +1038,20 @@ adminRoutes.get('/audit-logs', (req, res) => {
     .all(role, role, q, like, like, like);
 
   res.json({ logs });
+});
+
+adminRoutes.delete('/audit-logs/:id', (req, res) => {
+  const existing = db.prepare('SELECT id FROM audit_logs WHERE id = ?').get(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Entri Audit Log tidak ditemukan.' });
+  }
+  db.prepare('DELETE FROM audit_logs WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+adminRoutes.delete('/audit-logs', (_req, res) => {
+  const result = db.prepare('DELETE FROM audit_logs').run();
+  res.json({ ok: true, deletedCount: result.changes });
 });
 
 adminRoutes.get('/reports', (_req, res) => {

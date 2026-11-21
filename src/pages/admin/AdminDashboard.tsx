@@ -19,8 +19,19 @@ import {
   CheckSquare,
   Square,
   UserPlus,
+  Link2,
+  Check,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Activity,
+  Timer,
+  Zap,
+  ArrowRight,
+  FileSpreadsheet,
 } from 'lucide-react';
-import { apiFetch, downloadCsv } from '../../lib/api.ts';
+import { QRCodeSVG } from 'qrcode.react';
+import { apiFetch, downloadCsv, formatLocalDateTime, formatLocalDate } from '../../lib/api.ts';
 import type {
   AuthUser,
   School,
@@ -52,30 +63,60 @@ const ADMIN_NAV: NavItem[] = [
 ];
 
 interface AdminOverviewData {
+  schoolsList: Array<{
+    id: string;
+    name: string;
+    level: string;
+    status: string;
+  }>;
   stats: {
     totalSchools: number;
     activeSchools: number;
+    totalClasses: number;
     totalBkTeachers: number;
+    activeBkTeachers: number;
     totalStudents: number;
+    assessedStudents: number;
+    assessmentCompletionPct: number;
     activeAccounts: number;
     totalConsultations: number;
+    pendingConsultations: number;
+    doneConsultations: number;
+    attentionAlerts: number;
     totalAssessments: number;
+    avgAssessmentScore: number;
     totalUsageRecords: number;
     totalTargets: number;
+    completedTargets: number;
+    targetCompletionPct: number;
     totalJournals: number;
+    sharedJournals: number;
+    totalFocusSessions: number;
   };
   featureUsage: Array<{ label: string; count: number }>;
   schoolDistribution: Array<{
     id: string;
     name: string;
     level: string;
+    address: string;
     status: string;
+    createdAt: string;
     bkCount: number;
     studentCount: number;
+    userCount: number;
+    classCount: number;
     assessmentCount: number;
     consultationCount: number;
+    alertCount: number;
   }>;
   activityTrend: Array<{ day: string; count: number }>;
+  activity7dBreakdown: {
+    assessments: number;
+    journals: number;
+    usageRecords: number;
+    consultations: number;
+    totalEvents: number;
+  };
   recentAuditLogs: Array<{
     id: string;
     username: string;
@@ -95,10 +136,13 @@ interface UnifiedUserRow {
   role: string;
   schoolId: string | null;
   schoolName: string;
+  schoolLevel?: string | null;
   status: 'ACTIVE' | 'INACTIVE';
   createdAt: string;
   bkTeacherId: string | null;
   studentId: string | null;
+  nisNisn?: string | null;
+  className?: string | null;
 }
 
 interface SchoolReportRow {
@@ -156,9 +200,13 @@ export function AdminDashboard({
   onDismissNotice?: () => void;
 }) {
   const [overview, setOverview] = useState<AdminOverviewData | null>(null);
+  const [overviewSchoolFilter, setOverviewSchoolFilter] = useState('');
   const [schools, setSchools] = useState<School[]>([]);
   const [schoolSearch, setSchoolSearch] = useState('');
   const [selectedSchoolId, setSelectedSchoolId] = useState<string | null>(null);
+  const [detailModalSchoolId, setDetailModalSchoolId] = useState<string | null>(null);
+  const [detailModalLoading, setDetailModalLoading] = useState(false);
+  const [copiedSchoolLink, setCopiedSchoolLink] = useState(false);
   const [schoolDetail, setSchoolDetail] = useState<{
     school: School;
     classes: SchoolClass[];
@@ -168,6 +216,9 @@ export function AdminDashboard({
       bkCount: number;
       studentCount: number;
       assessmentCount: number;
+      journalCount?: number;
+      reflectionCount?: number;
+      reflection30dCount?: number;
       usageRecordCount: number;
       targetCount: number;
       consultationTotal: number;
@@ -243,6 +294,9 @@ export function AdminDashboard({
   const [newPasswordInput, setNewPasswordInput] = useState('');
 
   const [deleteBkTarget, setDeleteBkTarget] = useState<BkTeacher | null>(null);
+  const [deleteUserTarget, setDeleteUserTarget] = useState<{ id: string; fullName: string; roleLabel: string } | null>(null);
+  const [deleteAuditTarget, setDeleteAuditTarget] = useState<AuditLog | null>(null);
+  const [clearAuditModalOpen, setClearAuditModalOpen] = useState(false);
 
   const [adminAccountModalOpen, setAdminAccountModalOpen] = useState(false);
   const [adminAccountForm, setAdminAccountForm] = useState({
@@ -258,9 +312,10 @@ export function AdminDashboard({
   const [guideSubTab, setGuideSubTab] = useState<'panduan' | 'uji' | 'ai-tools'>('panduan');
 
   const loadOverview = useCallback(async () => {
-    const data = await apiFetch<AdminOverviewData>('/api/admin/overview');
+    const query = overviewSchoolFilter ? `?schoolId=${encodeURIComponent(overviewSchoolFilter)}` : '';
+    const data = await apiFetch<AdminOverviewData>(`/api/admin/overview${query}`);
     setOverview(data);
-  }, []);
+  }, [overviewSchoolFilter]);
 
   const loadSchools = useCallback(async (q = '') => {
     const data = await apiFetch<{ schools: School[] }>(`/api/admin/schools?q=${encodeURIComponent(q)}`);
@@ -360,6 +415,30 @@ export function AdminDashboard({
       .catch(() => setStudentFormClasses([]));
   }, [studentForm.schoolId]);
 
+  async function openSchoolDetailModal(id: string) {
+    setDetailModalSchoolId(id);
+    setCopiedSchoolLink(false);
+    setDetailModalLoading(true);
+    try {
+      await loadSchoolDetail(id);
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal memuat detail sekolah.' });
+      setDetailModalSchoolId(null);
+    } finally {
+      setDetailModalLoading(false);
+    }
+  }
+
+  async function copyStudentLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedSchoolLink(true);
+      setTimeout(() => setCopiedSchoolLink(false), 2200);
+    } catch {
+      setFeedback({ type: 'err', text: 'Gagal menyalin tautan ke clipboard. Salin tautan secara manual.' });
+    }
+  }
+
   function openAddSchool() {
     setEditingSchool(null);
     setSchoolForm({ name: '', npsn: '', level: 'SMA', address: '', email: '', phone: '', status: 'ACTIVE' });
@@ -398,7 +477,8 @@ export function AdminDashboard({
       }
       setSchoolModalOpen(false);
       await loadSchools(schoolSearch);
-      if (selectedSchoolId) await loadSchoolDetail(selectedSchoolId);
+      const refreshId = selectedSchoolId || detailModalSchoolId;
+      if (refreshId) await loadSchoolDetail(refreshId);
     } catch (err) {
       setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal menyimpan sekolah.' });
     }
@@ -412,7 +492,7 @@ export function AdminDashboard({
         body: JSON.stringify({ status: next }),
       });
       await loadSchools(schoolSearch);
-      if (selectedSchoolId === s.id) await loadSchoolDetail(s.id);
+      if (selectedSchoolId === s.id || detailModalSchoolId === s.id) await loadSchoolDetail(s.id);
       setFeedback({ type: 'ok', text: `Status sekolah "${s.name}" diubah menjadi ${next === 'ACTIVE' ? 'Aktif' : 'Nonaktif'}.` });
     } catch (err) {
       setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal mengubah status.' });
@@ -424,8 +504,9 @@ export function AdminDashboard({
     try {
       await apiFetch(`/api/admin/schools/${deleteSchoolTarget.id}`, { method: 'DELETE' });
       setFeedback({ type: 'ok', text: `Sekolah "${deleteSchoolTarget.name}" telah dihapus.` });
-      if (selectedSchoolId === deleteSchoolTarget.id) {
+      if (selectedSchoolId === deleteSchoolTarget.id || detailModalSchoolId === deleteSchoolTarget.id) {
         setSelectedSchoolId(null);
+        setDetailModalSchoolId(null);
         setSchoolDetail(null);
       }
       setDeleteSchoolTarget(null);
@@ -484,7 +565,9 @@ export function AdminDashboard({
         setFeedback({ type: 'ok', text: `Akun Guru BK "${bkForm.fullName}" berhasil dibuat dan siap digunakan login.` });
       }
       setBkModalOpen(false);
-      if (selectedSchoolId) await loadSchoolDetail(selectedSchoolId);
+      await loadSchools(schoolSearch);
+      const refreshId = selectedSchoolId || detailModalSchoolId;
+      if (refreshId) await loadSchoolDetail(refreshId);
       if (activeTab === 'pengguna') await loadUsers();
     } catch (err) {
       setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal menyimpan Guru BK.' });
@@ -497,7 +580,9 @@ export function AdminDashboard({
       await apiFetch(`/api/admin/bk-teachers/${deleteBkTarget.id}`, { method: 'DELETE' });
       setFeedback({ type: 'ok', text: `Akun Guru BK "${deleteBkTarget.fullName}" dihapus.` });
       setDeleteBkTarget(null);
-      if (selectedSchoolId) await loadSchoolDetail(selectedSchoolId);
+      await loadSchools(schoolSearch);
+      const refreshId = selectedSchoolId || detailModalSchoolId;
+      if (refreshId) await loadSchoolDetail(refreshId);
       if (activeTab === 'pengguna') await loadUsers();
     } catch (err) {
       setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal menghapus Guru BK.' });
@@ -528,7 +613,9 @@ export function AdminDashboard({
       });
       setFeedback({ type: 'ok', text: `Akun Peserta Didik "${studentForm.fullName}" berhasil dibuat.` });
       setStudentModalOpen(false);
-      if (selectedSchoolId) await loadSchoolDetail(selectedSchoolId);
+      await loadSchools(schoolSearch);
+      const refreshId = selectedSchoolId || detailModalSchoolId;
+      if (refreshId) await loadSchoolDetail(refreshId);
       if (activeTab === 'pengguna') await loadUsers();
       if (activeTab === 'data-siswa') await loadStudents();
     } catch (err) {
@@ -565,6 +652,43 @@ export function AdminDashboard({
       setNewPasswordInput('');
     } catch (err) {
       setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal mereset password.' });
+    }
+  }
+
+  async function confirmDeleteUser() {
+    if (!deleteUserTarget) return;
+    try {
+      await apiFetch(`/api/admin/users/${deleteUserTarget.id}`, { method: 'DELETE' });
+      setFeedback({ type: 'ok', text: `Akun ${deleteUserTarget.roleLabel} "${deleteUserTarget.fullName}" berhasil dihapus.` });
+      setDeleteUserTarget(null);
+      if (activeTab === 'pengguna') await loadUsers();
+      if (activeTab === 'data-siswa') await loadStudents();
+      if (selectedSchoolId) await loadSchoolDetail(selectedSchoolId);
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal menghapus akun pengguna.' });
+    }
+  }
+
+  async function confirmDeleteAuditLog() {
+    if (!deleteAuditTarget) return;
+    try {
+      await apiFetch(`/api/admin/audit-logs/${deleteAuditTarget.id}`, { method: 'DELETE' });
+      setDeleteAuditTarget(null);
+      setFeedback({ type: 'ok', text: 'Satu entri riwayat Audit Log telah dihapus.' });
+      await loadAuditLogs();
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal menghapus riwayat log.' });
+    }
+  }
+
+  async function confirmClearAuditLogs() {
+    try {
+      await apiFetch('/api/admin/audit-logs', { method: 'DELETE' });
+      setClearAuditModalOpen(false);
+      setFeedback({ type: 'ok', text: 'Seluruh riwayat Audit Log telah dibersihkan.' });
+      await loadAuditLogs();
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal membersihkan riwayat log.' });
     }
   }
 
@@ -620,7 +744,7 @@ export function AdminDashboard({
     }
   }
 
-  function exportAdminReportCsv() {
+  function downloadSchoolReportRows(rowsInput: SchoolReportRow[]) {
     downloadCsv(
       `laporan-digital-balance-${new Date().toISOString().slice(0, 10)}.csv`,
       [
@@ -637,7 +761,7 @@ export function AdminDashboard({
         'Konsultasi Total',
         'Konsultasi Selesai',
       ],
-      reports.map((r) => [
+      rowsInput.map((r) => [
         r.name,
         r.npsn,
         r.level,
@@ -652,6 +776,23 @@ export function AdminDashboard({
         r.consultationDone,
       ])
     );
+  }
+
+  function exportAdminReportCsv() {
+    downloadSchoolReportRows(reports);
+  }
+
+  async function handleDownloadOverviewExcel() {
+    try {
+      const data = await apiFetch<{ perSchool: SchoolReportRow[] }>('/api/admin/reports');
+      const filteredRows = overviewSchoolFilter
+        ? data.perSchool.filter((row) => row.id === overviewSchoolFilter)
+        : data.perSchool;
+      downloadSchoolReportRows(filteredRows);
+      setFeedback({ type: 'ok', text: 'Laporan rekap sekolah (.csv / Excel) berhasil diunduh.' });
+    } catch (err) {
+      setFeedback({ type: 'err', text: err instanceof Error ? err.message : 'Gagal mengunduh laporan.' });
+    }
   }
 
   return (
@@ -691,128 +832,355 @@ export function AdminDashboard({
       {/* 1. RINGKASAN */}
       {activeTab === 'ringkasan' && (
         <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900 font-display">Ringkasan Sistem</h1>
+              <h1 className="text-2xl font-bold text-slate-900 font-display tracking-tight">Admin Central</h1>
               <p className="text-sm text-slate-500 mt-0.5">
-                Statistik keseluruhan DIGITAL BALANCE berdasarkan data langsung dari database.
+                Ringkasan sekolah, pengguna, dan status platform DIGITAL BALANCE.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            <div className="flex flex-wrap items-center gap-2.5 self-start xl:self-auto">
+              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5">
+                <span className="text-[11px] font-medium text-slate-500 whitespace-nowrap">Filter Sekolah:</span>
+                <select
+                  value={overviewSchoolFilter}
+                  onChange={(e) => setOverviewSchoolFilter(e.target.value)}
+                  className="text-xs font-semibold text-slate-800 bg-transparent focus:outline-none pr-1"
+                  aria-label="Filter Sekolah Ringkasan"
+                >
+                  <option value="">Semua Sekolah</option>
+                  {(overview?.schoolsList ?? []).map((sc) => (
+                    <option key={sc.id} value={sc.id}>
+                      {sc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <button
                 type="button"
-                onClick={openAdminAccountModal}
-                className="px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-medium rounded-lg inline-flex items-center gap-2"
+                onClick={handleDownloadOverviewExcel}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs sm:text-sm font-medium rounded-xl inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-colors"
               >
-                <KeyRound className="w-4 h-4 text-violet-700" />
-                <span>Akun &amp; Password Admin</span>
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span>Unduh Laporan Excel</span>
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  onSelectTab('sekolah');
-                  openAddSchool();
-                }}
-                className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2"
+                onClick={openAdminAccountModal}
+                className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 text-xs sm:text-sm font-medium rounded-xl inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-colors"
               >
-                <Plus className="w-4 h-4" />
-                <span>Tambah Sekolah</span>
+                <KeyRound className="w-4 h-4 text-violet-700" />
+                <span>Akun Admin</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectTab('sekolah')}
+                className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-xs sm:text-sm font-semibold rounded-xl inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-colors"
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Manajemen Sekolah</span>
               </button>
             </div>
           </div>
 
           {overview ? (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-                <StatCard label="Sekolah Terdaftar" value={overview.stats.totalSchools} subtext={`${overview.stats.activeSchools} sekolah aktif`} accent />
-                <StatCard label="Total Guru BK" value={overview.stats.totalBkTeachers} subtext="Pendamping sekolah" />
-                <StatCard label="Peserta Didik" value={overview.stats.totalStudents} subtext="Terdaftar lintas sekolah" />
-                <StatCard label="Akun Aktif" value={overview.stats.activeAccounts} subtext="Semua role aktif" />
-                <StatCard label="Aktivitas Cek Diri" value={overview.stats.totalAssessments} subtext="Total pengisian" />
-                <StatCard label="Permintaan Konsultasi" value={overview.stats.totalConsultations} subtext="Agregat layanan BK" />
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-white border border-slate-200 rounded-xl p-6">
-                  <h2 className="text-base font-semibold text-slate-900 mb-1">Statistik Penggunaan Fitur</h2>
-                  <p className="text-xs text-slate-500 mb-5">Jumlah entri nyata pada setiap layanan DIGITAL BALANCE</p>
-                  <SimpleBarChart
-                    data={overview.featureUsage.map((f) => ({ label: f.label, value: f.count }))}
-                    unit="entri"
-                  />
+              {/* 3x3 KPI Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Total Sekolah</span>
+                    <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.totalSchools}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    {overview.stats.activeSchools} sekolah aktif · {overview.stats.totalClasses} kelas
+                  </p>
                 </div>
 
-                <div className="bg-white border border-slate-200 rounded-xl p-6">
-                  <h2 className="text-base font-semibold text-slate-900 mb-1">Perkembangan Aktivitas Pengguna</h2>
-                  <p className="text-xs text-slate-500 mb-5">Aktivitas sistem harian tercatat dalam Audit Log</p>
-                  <SimpleBarChart
-                    data={overview.activityTrend.map((d) => ({ label: d.day, value: d.count }))}
-                    unit="aktivitas"
-                    emptyText="Belum ada aktivitas tercatat."
-                  />
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Total Guru BK</span>
+                    <Users className="w-4 h-4 text-slate-400 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.totalBkTeachers}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    {overview.stats.activeBkTeachers} pendamping aktif
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Total Siswa</span>
+                    <GraduationCap className="w-4 h-4 text-slate-400 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.totalStudents}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    Tersebar di {overview.stats.totalClasses} kelas terdaftar
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Partisipasi Cek Diri</span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.assessmentCompletionPct}%
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    {overview.stats.assessedStudents} dari {overview.stats.totalStudents} siswa telah mengisi
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Konsultasi Pending</span>
+                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.pendingConsultations}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    {overview.stats.pendingConsultations === 0
+                      ? 'Semua permintaan tertangani'
+                      : `${overview.stats.doneConsultations} selesai dari ${overview.stats.totalConsultations} permintaan`}
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Perlu Pendampingan</span>
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.attentionAlerts}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    Hasil Cek Diri perlu perhatian Guru BK
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Rata-Rata Skor Cek Diri</span>
+                    <Activity className="w-4 h-4 text-violet-600 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.avgAssessmentScore}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    Dari {overview.stats.totalAssessments} pengisian (skala 16–64)
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Jurnal Refleksi</span>
+                    <BookOpenCheck className="w-4 h-4 text-sky-600 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.totalJournals}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    {overview.stats.sharedJournals} jurnal dibagikan ke Guru BK
+                  </p>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Target &amp; Fokus Digital</span>
+                    <Timer className="w-4 h-4 text-emerald-600 shrink-0" />
+                  </div>
+                  <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums mt-3">
+                    {overview.stats.targetCompletionPct}%
+                  </p>
+                  <p className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                    {overview.stats.completedTargets}/{overview.stats.totalTargets} target · {overview.stats.totalFocusSessions} sesi fokus
+                  </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                  <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-slate-900">Sebaran Sekolah</h2>
+              {/* Bottom Split: Sekolah Terdaftar & Aktivitas 7 Hari */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+                  <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-violet-700 shrink-0" />
+                      <h2 className="text-base font-semibold text-slate-900">Sekolah Terdaftar</h2>
+                    </div>
                     <button
                       type="button"
                       onClick={() => onSelectTab('sekolah')}
-                      className="text-xs font-semibold text-violet-700 hover:underline"
+                      className="text-xs font-semibold text-violet-700 hover:text-violet-900 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
                     >
-                      Kelola Sekolah
+                      <span>Kelola semua</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto flex-1">
                     <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
+                      <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
                         <tr>
-                          <th className="text-left px-5 py-3 font-medium">Sekolah</th>
-                          <th className="text-right px-4 py-3 font-medium">Guru BK</th>
-                          <th className="text-right px-4 py-3 font-medium">Siswa</th>
-                          <th className="text-left px-5 py-3 font-medium">Status</th>
+                          <th className="text-left px-5 py-3 font-semibold">Sekolah</th>
+                          <th className="text-right px-4 py-3 font-semibold">Pengguna</th>
+                          <th className="text-right px-4 py-3 font-semibold">Kelas</th>
+                          <th className="text-right px-4 py-3 font-semibold">Alert</th>
+                          <th className="text-right px-5 py-3 font-semibold">Bergabung</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {overview.schoolDistribution.map((s) => (
-                          <tr key={s.id} className="hover:bg-slate-50">
-                            <td className="px-5 py-3 font-medium text-slate-900">{s.name}</td>
-                            <td className="px-4 py-3 text-right font-mono tabular-nums text-slate-700">{s.bkCount}</td>
-                            <td className="px-4 py-3 text-right font-mono tabular-nums text-slate-700">{s.studentCount}</td>
-                            <td className="px-5 py-3">
-                              <StatusLabel status={s.status} />
+                          <tr
+                            key={s.id}
+                            onClick={() => {
+                              onSelectTab('sekolah');
+                              setSelectedSchoolId(s.id);
+                            }}
+                            className="hover:bg-slate-50 cursor-pointer transition-colors"
+                          >
+                            <td className="px-5 py-3.5">
+                              <div className="flex items-center gap-3">
+                                <span className="w-7 h-7 rounded-lg bg-violet-50 border border-violet-200 text-violet-700 text-xs font-bold flex items-center justify-center shrink-0">
+                                  {s.name.trim().charAt(0).toUpperCase()}
+                                </span>
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-slate-900 truncate">{s.name}</p>
+                                  <p className="text-xs text-slate-500 truncate">
+                                    {s.level} · {s.status === 'ACTIVE' ? 'Aktif' : 'Nonaktif'}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-mono tabular-nums text-slate-800 font-medium">
+                              {s.userCount}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-mono tabular-nums text-slate-700">
+                              {s.classCount}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-mono tabular-nums">
+                              <span className={s.alertCount > 0 ? 'font-semibold text-rose-700' : 'text-slate-500'}>
+                                {s.alertCount}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5 text-right font-mono tabular-nums text-xs text-slate-500 whitespace-nowrap">
+                              {formatLocalDate(s.createdAt)}
                             </td>
                           </tr>
                         ))}
+                        {overview.schoolDistribution.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">
+                              Belum ada sekolah terdaftar.
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
                 </div>
 
-                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                  <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-slate-900">Aktivitas Terbaru (Audit Log)</h2>
-                    <button
-                      type="button"
-                      onClick={() => onSelectTab('audit-log')}
-                      className="text-xs font-semibold text-violet-700 hover:underline"
-                    >
-                      Lihat Semua
-                    </button>
-                  </div>
-                  <div className="divide-y divide-slate-100">
-                    {overview.recentAuditLogs.map((log) => (
-                      <div key={log.id} className="px-5 py-3 text-xs space-y-0.5">
-                        <div className="flex items-center justify-between text-slate-500">
-                          <span className="font-semibold text-slate-800">{log.username} · {log.action}</span>
-                          <span className="font-mono tabular-nums">{log.createdAt.slice(0, 16)}</span>
-                        </div>
-                        <p className="text-slate-600">{log.details}</p>
+                <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-5">
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-violet-700 shrink-0" />
+                        <h2 className="text-base font-semibold text-slate-900">Aktivitas 7 Hari</h2>
                       </div>
-                    ))}
+                      <span className="text-xs font-mono tabular-nums font-semibold text-slate-700">
+                        {overview.activity7dBreakdown.totalEvents} log
+                      </span>
+                    </div>
+
+                    {/* 7-day Sparkline + Day Bars */}
+                    {(() => {
+                      const trend = overview.activityTrend;
+                      const maxVal = Math.max(...trend.map((d) => d.count), 1);
+                      const points = trend
+                        .map((d, idx) => {
+                          const x = trend.length > 1 ? (idx / (trend.length - 1)) * 220 + 10 : 120;
+                          const y = 58 - (d.count / maxVal) * 44;
+                          return `${x},${y}`;
+                        })
+                        .join(' ');
+                      return (
+                        <div className="mt-5">
+                          <svg viewBox="0 0 240 72" className="w-full h-20 overflow-visible" role="img" aria-label="Grafik aktivitas 7 hari">
+                            <line x1="8" y1="60" x2="232" y2="60" stroke="#E2E8F0" strokeWidth="1" />
+                            {trend.length > 1 && (
+                              <polyline
+                                fill="none"
+                                stroke="#6D28D9"
+                                strokeWidth="2.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                points={points}
+                              />
+                            )}
+                            {trend.map((d, idx) => {
+                              const x = trend.length > 1 ? (idx / (trend.length - 1)) * 220 + 10 : 120;
+                              const y = 58 - (d.count / maxVal) * 44;
+                              return (
+                                <g key={d.day}>
+                                  <circle cx={x} cy={y} r="3.2" fill="#FFFFFF" stroke="#6D28D9" strokeWidth="2" />
+                                </g>
+                              );
+                            })}
+                          </svg>
+                          <div className="grid grid-cols-7 gap-1 mt-1 text-center">
+                            {trend.map((d) => (
+                              <div key={d.day} className="space-y-0.5">
+                                <p className="text-[11px] font-mono tabular-nums font-semibold text-slate-700">{d.count}</p>
+                                <p className="text-[10px] font-mono tabular-nums text-slate-400">{d.day.slice(5)}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="mt-5 pt-4 border-t border-slate-100 space-y-2 text-xs">
+                      <div className="flex items-center justify-between text-slate-600">
+                        <span>Pengisian Cek Diri</span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">
+                          {overview.activity7dBreakdown.assessments}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-600">
+                        <span>Jurnal Refleksi</span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">
+                          {overview.activity7dBreakdown.journals}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-600">
+                        <span>Catatan Durasi Layar</span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">
+                          {overview.activity7dBreakdown.usageRecords}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-600">
+                        <span>Permintaan Konsultasi</span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">
+                          {overview.activity7dBreakdown.consultations}
+                        </span>
+                      </div>
+                    </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onSelectTab('audit-log')}
+                    className="w-full py-2 px-3 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-700 inline-flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>Lihat Audit Log Lengkap</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             </>
@@ -829,112 +1197,155 @@ export function AdminDashboard({
             <div>
               <h1 className="text-2xl font-bold text-slate-900 font-display">Manajemen Sekolah</h1>
               <p className="text-sm text-slate-500 mt-0.5">
-                Kelola sekolah mitra, detail kelas, Guru BK, dan status operasional dalam satu sistem.
+                Daftar sekolah, tautan siswa, dan Guru BK di setiap sekolah.
               </p>
             </div>
             <button
               type="button"
               onClick={openAddSchool}
-              className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2 self-start"
+              className="px-4 py-2.5 bg-violet-700 hover:bg-violet-800 text-white text-sm font-semibold rounded-xl inline-flex items-center gap-2 self-start shrink-0 transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span>Tambah Sekolah</span>
             </button>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-3">
+          <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex items-center gap-3">
             <Search className="w-4 h-4 text-slate-400 shrink-0" />
             <input
               type="text"
               value={schoolSearch}
               onChange={(e) => setSchoolSearch(e.target.value)}
-              placeholder="Cari sekolah berdasarkan nama atau NPSN..."
+              placeholder="Cari sekolah berdasarkan nama, wilayah, atau NPSN..."
               className="flex-1 text-sm bg-transparent focus:outline-none text-slate-900"
             />
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                  <tr>
-                    <th className="text-left px-5 py-3 font-medium">Nama Sekolah &amp; NPSN</th>
-                    <th className="text-left px-4 py-3 font-medium">Jenjang</th>
-                    <th className="text-right px-4 py-3 font-medium">Guru BK</th>
-                    <th className="text-right px-4 py-3 font-medium">Peserta Didik</th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
-                    <th className="text-right px-5 py-3 font-medium">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {schools.map((s) => (
-                    <tr key={s.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-3.5">
+          {(() => {
+            const maxReflection30d = Math.max(...schools.map((sc) => sc.reflection30dCount ?? 0), 1);
+            if (!schools.length && !loading) {
+              return (
+                <div className="bg-white border border-slate-200 rounded-2xl px-6 py-12 text-center space-y-3">
+                  <p className="text-sm text-slate-500">Belum ada sekolah yang sesuai dengan pencarian.</p>
+                  <button
+                    type="button"
+                    onClick={openAddSchool}
+                    className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-xs font-semibold rounded-lg inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tambah Sekolah Pertama</span>
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                {schools.map((s) => {
+                  const consultTotal = s.consultationCount ?? 0;
+                  const consultDone = s.consultationDoneCount ?? 0;
+                  const consultPct = consultTotal > 0 ? Math.round((consultDone / consultTotal) * 100) : 0;
+                  const r30 = s.reflection30dCount ?? 0;
+                  const r30Pct = r30 > 0 ? Math.max(8, Math.round((r30 / maxReflection30d) * 100)) : 0;
+
+                  return (
+                    <div
+                      key={s.id}
+                      className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-4 hover:border-violet-300 transition-colors"
+                    >
+                      {/* Top Header */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-700 flex items-center justify-center shrink-0">
+                            <Building2 className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <h2 className="text-base font-bold text-slate-900 leading-snug line-clamp-2">
+                              {s.name}
+                            </h2>
+                            <p className="text-xs text-slate-500 mt-0.5 truncate" title={s.address}>
+                              {s.address}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="shrink-0 pt-0.5">
+                          <StatusLabel status={s.status} />
+                        </div>
+                      </div>
+
+                      {/* 3-Column Metrics */}
+                      <div className="grid grid-cols-3 gap-2 bg-slate-50 border border-slate-100 rounded-xl py-3 px-2 text-center">
+                        <div>
+                          <div className="text-lg font-bold text-slate-900 font-mono tabular-nums">
+                            {s.bkCount ?? 0}
+                          </div>
+                          <div className="text-[11px] text-slate-500">Guru BK</div>
+                        </div>
+                        <div className="border-x border-slate-200/70">
+                          <div className="text-lg font-bold text-slate-900 font-mono tabular-nums">
+                            {consultTotal}
+                          </div>
+                          <div className="text-[11px] text-slate-500">Permintaan</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold text-slate-900 font-mono tabular-nums">
+                            {s.reflectionCount ?? s.assessmentCount ?? 0}
+                          </div>
+                          <div className="text-[11px] text-slate-500">Refleksi</div>
+                        </div>
+                      </div>
+
+                      {/* Progress Rows */}
+                      <div className="space-y-3">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-600">Permintaan selesai</span>
+                            <span className="font-mono tabular-nums font-semibold text-slate-900">
+                              {consultDone}/{consultTotal}
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-600 rounded-full transition-all duration-300"
+                              style={{ width: `${consultPct}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-600">Refleksi 30 hari</span>
+                            <span className="font-mono tabular-nums font-semibold text-slate-900">
+                              {r30}
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-700 rounded-full transition-all duration-300"
+                              style={{ width: `${r30Pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card Footer */}
+                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                        <span className="text-xs text-slate-500 font-mono tabular-nums">
+                          Bergabung {formatLocalDate(s.createdAt)}
+                        </span>
                         <button
                           type="button"
-                          onClick={() => setSelectedSchoolId(s.id)}
-                          className="text-left font-semibold text-violet-700 hover:underline"
+                          onClick={() => openSchoolDetailModal(s.id)}
+                          className="px-3.5 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0"
                         >
-                          {s.name}
+                          Detail
                         </button>
-                        <div className="text-xs text-slate-500 font-mono tabular-nums mt-0.5">
-                          NPSN {s.npsn} · {s.email}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 text-slate-700">{s.level}</td>
-                      <td className="px-4 py-3.5 text-right font-mono tabular-nums text-slate-900">{s.bkCount ?? 0}</td>
-                      <td className="px-4 py-3.5 text-right font-mono tabular-nums text-slate-900">{s.studentCount ?? 0}</td>
-                      <td className="px-4 py-3.5">
-                        <StatusLabel status={s.status} />
-                      </td>
-                      <td className="px-5 py-3.5 text-right">
-                        <div className="inline-flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedSchoolId(s.id)}
-                            className="px-2.5 py-1.5 text-xs font-medium text-violet-700 bg-violet-50 hover:bg-violet-100 rounded-md"
-                          >
-                            Detail
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditSchool(s)}
-                            className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md"
-                            title="Edit Sekolah"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => toggleSchoolStatus(s)}
-                            className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-md"
-                            title={s.status === 'ACTIVE' ? 'Nonaktifkan Sekolah' : 'Aktifkan Sekolah'}
-                          >
-                            <Power className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteSchoolTarget(s)}
-                            className="p-1.5 text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded-md"
-                            title="Hapus Sekolah"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {!schools.length && !loading && (
-                    <tr>
-                      <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
-                        Tidak ada sekolah yang sesuai dengan pencarian.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1107,44 +1518,90 @@ export function AdminDashboard({
             </div>
 
             <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-200">
-                <h2 className="text-base font-semibold text-slate-900">Data Peserta Didik (Identitas Dasar)</h2>
-                <p className="text-xs text-slate-500">Jurnal pribadi dan isi konsultasi tetap bersifat rahasia.</p>
+              <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">Data Peserta Didik (Per Kelas)</h2>
+                  <p className="text-xs text-slate-500">Dikelompokkan per kelas · Jurnal pribadi &amp; isi konsultasi tetap rahasia.</p>
+                </div>
+                <span className="text-xs font-mono font-semibold text-slate-600 shrink-0">
+                  {schoolDetail.students.length} siswa
+                </span>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                    <tr>
-                      <th className="text-left px-5 py-3 font-medium">Nama</th>
-                      <th className="text-left px-4 py-3 font-medium">NIS/NISN</th>
-                      <th className="text-left px-4 py-3 font-medium">Kelas</th>
-                      <th className="text-left px-4 py-3 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {schoolDetail.students.map((st) => (
-                      <tr key={st.id}>
-                        <td className="px-5 py-3">
-                          <div className="font-medium text-slate-900">{st.fullName}</div>
-                          <div className="text-xs text-slate-500 font-mono">{st.username}</div>
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.nisNisn}</td>
-                        <td className="px-4 py-3 text-slate-700">{st.className || '-'}</td>
-                        <td className="px-4 py-3">
-                          <StatusLabel status={st.status} />
-                        </td>
-                      </tr>
+
+              {(() => {
+                const classOrder = schoolDetail.classes.map((c) => c.name);
+                const grouped = new Map<string, StudentRecord[]>();
+                for (const cName of classOrder) grouped.set(cName, []);
+                for (const st of schoolDetail.students) {
+                  const key = st.className && st.className !== '-' ? st.className : 'Belum Ditempatkan di Kelas';
+                  if (!grouped.has(key)) grouped.set(key, []);
+                  grouped.get(key)!.push(st);
+                }
+                const entries = Array.from(grouped.entries()).filter(([, list]) => list.length > 0);
+                if (!entries.length) {
+                  return (
+                    <div className="px-5 py-8 text-center text-sm text-slate-500">
+                      Belum ada peserta didik terdaftar di sekolah ini.
+                    </div>
+                  );
+                }
+                return (
+                  <div className="divide-y divide-slate-200">
+                    {entries.map(([clsLabel, list]) => (
+                      <div key={clsLabel}>
+                        <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-800">
+                            {clsLabel === 'Belum Ditempatkan di Kelas' ? clsLabel : `Kelas ${clsLabel}`}
+                          </span>
+                          <span className="text-xs font-mono text-slate-500">{list.length} siswa</span>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-white text-xs text-slate-500 border-b border-slate-100">
+                              <tr>
+                                <th className="text-left px-5 py-2.5 font-medium">Nama</th>
+                                <th className="text-left px-4 py-2.5 font-medium">NIS/NISN</th>
+                                <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                                <th className="text-right px-5 py-2.5 font-medium">Aksi</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {list.map((st) => (
+                                <tr key={st.id} className="hover:bg-slate-50">
+                                  <td className="px-5 py-3">
+                                    <div className="font-medium text-slate-900">{st.fullName}</div>
+                                    <div className="text-xs text-slate-500 font-mono">{st.username}</div>
+                                  </td>
+                                  <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.nisNisn}</td>
+                                  <td className="px-4 py-3">
+                                    <StatusLabel status={st.status} />
+                                  </td>
+                                  <td className="px-5 py-3 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDeleteUserTarget({
+                                          id: st.userId,
+                                          fullName: st.fullName,
+                                          roleLabel: 'Peserta Didik',
+                                        })
+                                      }
+                                      className="p-1.5 text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded-md"
+                                      title="Hapus Peserta Didik"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     ))}
-                    {!schoolDetail.students.length && (
-                      <tr>
-                        <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">
-                          Belum ada peserta didik terdaftar di sekolah ini.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -1157,7 +1614,7 @@ export function AdminDashboard({
             <div>
               <h1 className="text-2xl font-bold text-slate-900 font-display">Manajemen Pengguna</h1>
               <p className="text-sm text-slate-500 mt-0.5">
-                Kelola akun Admin Central, Guru BK, dan Peserta Didik di seluruh sekolah.
+                Dikelompokkan per sekolah: Guru BK sesuai sekolah penugasan dan Peserta Didik sesuai kelas masing-masing.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1171,7 +1628,7 @@ export function AdminDashboard({
               </button>
               <button
                 type="button"
-                onClick={() => openAddBk()}
+                onClick={() => openAddBk(userSchoolFilter || '')}
                 className="px-3.5 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2"
               >
                 <UserPlus className="w-4 h-4" />
@@ -1179,7 +1636,7 @@ export function AdminDashboard({
               </button>
               <button
                 type="button"
-                onClick={() => openAddStudent()}
+                onClick={() => openAddStudent(userSchoolFilter || '')}
                 className="px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-medium rounded-lg inline-flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
@@ -1234,75 +1691,317 @@ export function AdminDashboard({
             </div>
           )}
 
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                  <tr>
-                    <th className="text-left px-5 py-3 font-medium">Nama Pengguna</th>
-                    <th className="text-left px-4 py-3 font-medium">Username</th>
-                    <th className="text-left px-4 py-3 font-medium">Role</th>
-                    <th className="text-left px-4 py-3 font-medium">Sekolah</th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
-                    <th className="text-left px-4 py-3 font-medium">Terdaftar</th>
-                    <th className="text-right px-5 py-3 font-medium">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {users.map((u) => (
-                    <tr key={u.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-3">
-                        <div className="font-medium text-slate-900">{u.fullName}</div>
-                        <div className="text-xs text-slate-500">{u.email}</div>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{u.username}</td>
-                      <td className="px-4 py-3 text-xs font-semibold text-violet-700">{u.role}</td>
-                      <td className="px-4 py-3 text-slate-700">{u.schoolName}</td>
-                      <td className="px-4 py-3">
-                        <StatusLabel status={u.status} />
-                      </td>
-                      <td className="px-4 py-3 font-mono tabular-nums text-xs text-slate-500">
-                        {u.createdAt.slice(0, 10)}
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setResetPwdUser({ id: u.id, name: u.fullName })}
-                            className="p-1.5 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-md"
-                            title="Reset Password"
-                          >
-                            <KeyRound className="w-4 h-4" />
-                          </button>
-                          {u.id !== user.id && (
+          {(() => {
+            const adminUsers = users.filter((u) => u.role === 'ADMIN_CENTRAL');
+            const schoolUsers = users.filter((u) => u.role !== 'ADMIN_CENTRAL');
+
+            // Group non-admin users strictly by school
+            const schoolGroupMap = new Map<
+              string,
+              {
+                schoolId: string;
+                schoolName: string;
+                bkTeachers: UnifiedUserRow[];
+                studentsByClass: Map<string, UnifiedUserRow[]>;
+              }
+            >();
+
+            for (const u of schoolUsers) {
+              const sid = u.schoolId || '__no_school__';
+              if (!schoolGroupMap.has(sid)) {
+                schoolGroupMap.set(sid, {
+                  schoolId: sid,
+                  schoolName: u.schoolName || 'Belum Terhubung Sekolah',
+                  bkTeachers: [],
+                  studentsByClass: new Map<string, UnifiedUserRow[]>(),
+                });
+              }
+              const grp = schoolGroupMap.get(sid)!;
+              if (u.role === 'GURU_BK') {
+                grp.bkTeachers.push(u);
+              } else {
+                const clsKey = u.className && u.className !== '-' ? u.className : 'Belum Ada Kelas';
+                if (!grp.studentsByClass.has(clsKey)) {
+                  grp.studentsByClass.set(clsKey, []);
+                }
+                grp.studentsByClass.get(clsKey)!.push(u);
+              }
+            }
+
+            const schoolGroups = Array.from(schoolGroupMap.values()).sort((a, b) =>
+              a.schoolName.localeCompare(b.schoolName, 'id')
+            );
+
+            if (adminUsers.length === 0 && schoolGroups.length === 0) {
+              return (
+                <div className="bg-white border border-slate-200 rounded-xl px-5 py-10 text-center text-sm text-slate-500">
+                  Tidak ada akun pengguna yang sesuai dengan filter.
+                </div>
+              );
+            }
+
+            const renderUserActionButtons = (u: UnifiedUserRow) => (
+              <div className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setResetPwdUser({ id: u.id, name: u.fullName })}
+                  className="p-1.5 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-md"
+                  title="Reset Password"
+                >
+                  <KeyRound className="w-4 h-4" />
+                </button>
+                {u.id !== user.id && (
+                  <button
+                    type="button"
+                    onClick={() => toggleUserStatus(u)}
+                    className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-md"
+                    title={u.status === 'ACTIVE' ? 'Nonaktifkan' : 'Aktifkan'}
+                  >
+                    <Power className="w-4 h-4" />
+                  </button>
+                )}
+                {u.role !== 'ADMIN_CENTRAL' && u.id !== user.id && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDeleteUserTarget({
+                        id: u.id,
+                        fullName: u.fullName,
+                        roleLabel: u.role === 'GURU_BK' ? 'Guru BK' : 'Peserta Didik',
+                      })
+                    }
+                    className="p-1.5 text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded-md"
+                    title="Hapus Akun"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            );
+
+            return (
+              <div className="space-y-6">
+                {/* Admin Central Account Section */}
+                {adminUsers.length > 0 && (
+                  <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3.5 bg-violet-50/70 border-b border-violet-100 flex items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900">Admin Central (Pusat Sistem)</h2>
+                        <p className="text-xs text-slate-500">Pengelola otoritas lintas sekolah</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={openAdminAccountModal}
+                        className="text-xs font-semibold text-violet-700 hover:underline"
+                      >
+                        Ubah Kredensial Admin
+                      </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
+                          <tr>
+                            <th className="text-left px-5 py-2.5 font-medium">Nama Pengguna</th>
+                            <th className="text-left px-4 py-2.5 font-medium">Username</th>
+                            <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                            <th className="text-left px-4 py-2.5 font-medium">Terdaftar</th>
+                            <th className="text-right px-5 py-2.5 font-medium">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {adminUsers.map((u) => (
+                            <tr key={u.id} className="hover:bg-slate-50">
+                              <td className="px-5 py-3">
+                                <div className="font-medium text-slate-900">{u.fullName}</div>
+                                <div className="text-xs text-slate-500">{u.email}</div>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-xs text-slate-700">{u.username}</td>
+                              <td className="px-4 py-3">
+                                <StatusLabel status={u.status} />
+                              </td>
+                              <td className="px-4 py-3 font-mono tabular-nums text-xs text-slate-500">
+                                {formatLocalDate(u.createdAt)}
+                              </td>
+                              <td className="px-5 py-3 text-right">{renderUserActionButtons(u)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-School Separated Cards */}
+                {schoolGroups.map((sg) => {
+                  const totalStudentsInSchool = Array.from(sg.studentsByClass.values()).reduce(
+                    (sum, arr) => sum + arr.length,
+                    0
+                  );
+                  const classEntries = Array.from(sg.studentsByClass.entries()).sort(([a], [b]) => {
+                    if (a === 'Belum Ada Kelas') return 1;
+                    if (b === 'Belum Ada Kelas') return -1;
+                    return a.localeCompare(b, 'id');
+                  });
+
+                  return (
+                    <div key={sg.schoolId} className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                      {/* School Section Header */}
+                      <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center shrink-0">
+                            <Building2 className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <h2 className="text-base font-bold text-slate-900 truncate">{sg.schoolName}</h2>
+                            <p className="text-xs text-slate-500">
+                              <span className="font-mono font-semibold text-slate-700">{sg.bkTeachers.length}</span> Guru BK ·{' '}
+                              <span className="font-mono font-semibold text-slate-700">{totalStudentsInSchool}</span> Peserta Didik ·{' '}
+                              <span className="font-mono font-semibold text-slate-700">{classEntries.length}</span> Kelas
+                            </p>
+                          </div>
+                        </div>
+                        {sg.schoolId !== '__no_school__' && (
+                          <div className="flex items-center gap-2 shrink-0">
                             <button
                               type="button"
-                              onClick={() => toggleUserStatus(u)}
-                              className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-md"
-                              title={u.status === 'ACTIVE' ? 'Nonaktifkan' : 'Aktifkan'}
+                              onClick={() => openAddBk(sg.schoolId)}
+                              className="px-3 py-1.5 text-xs font-semibold text-violet-700 bg-violet-50 hover:bg-violet-100 rounded-lg"
                             >
-                              <Power className="w-4 h-4" />
+                              + Guru BK
                             </button>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() => openAddStudent(sg.schoolId)}
+                              className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg"
+                            >
+                              + Peserta Didik
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Guru BK Sub-Section for This School */}
+                      {sg.bkTeachers.length > 0 && (
+                        <div className="border-b border-slate-200">
+                          <div className="px-5 py-2.5 bg-violet-50/50 border-b border-slate-100 flex items-center justify-between">
+                            <span className="text-xs font-bold text-violet-800">
+                              Guru BK · {sg.schoolName}
+                            </span>
+                            <span className="text-xs font-mono text-violet-700 font-semibold">
+                              {sg.bkTeachers.length} akun
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="bg-white text-xs text-slate-500 border-b border-slate-100">
+                                <tr>
+                                  <th className="text-left px-5 py-2.5 font-medium">Nama Guru BK</th>
+                                  <th className="text-left px-4 py-2.5 font-medium">Username</th>
+                                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                                  <th className="text-left px-4 py-2.5 font-medium">Terdaftar</th>
+                                  <th className="text-right px-5 py-2.5 font-medium">Aksi</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {sg.bkTeachers.map((u) => (
+                                  <tr key={u.id} className="hover:bg-slate-50">
+                                    <td className="px-5 py-3">
+                                      <div className="font-medium text-slate-900">{u.fullName}</div>
+                                      <div className="text-xs text-slate-500">{u.email}</div>
+                                    </td>
+                                    <td className="px-4 py-3 font-mono text-xs text-slate-700">{u.username}</td>
+                                    <td className="px-4 py-3">
+                                      <StatusLabel status={u.status} />
+                                    </td>
+                                    <td className="px-4 py-3 font-mono tabular-nums text-xs text-slate-500">
+                                      {formatLocalDate(u.createdAt)}
+                                    </td>
+                                    <td className="px-5 py-3 text-right">{renderUserActionButtons(u)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                      )}
+
+                      {/* Peserta Didik Sub-Sections Grouped by Kelas */}
+                      {classEntries.length > 0 && (
+                        <div className="divide-y divide-slate-200">
+                          {classEntries.map(([clsName, stuList]) => (
+                            <div key={clsName}>
+                              <div className="px-5 py-2.5 bg-slate-50/70 border-b border-slate-100 flex items-center justify-between">
+                                <span className="text-xs font-bold text-slate-800">
+                                  {clsName === 'Belum Ada Kelas' ? 'Peserta Didik · Belum Ada Kelas' : `Peserta Didik · Kelas ${clsName}`}
+                                </span>
+                                <span className="text-xs font-mono text-slate-500">
+                                  {stuList.length} siswa
+                                </span>
+                              </div>
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-white text-xs text-slate-500 border-b border-slate-100">
+                                    <tr>
+                                      <th className="text-left px-5 py-2.5 font-medium">Nama Peserta Didik</th>
+                                      <th className="text-left px-4 py-2.5 font-medium">NIS/NISN</th>
+                                      <th className="text-left px-4 py-2.5 font-medium">Username</th>
+                                      <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                                      <th className="text-left px-4 py-2.5 font-medium">Terdaftar</th>
+                                      <th className="text-right px-5 py-2.5 font-medium">Aksi</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {stuList.map((u) => (
+                                      <tr key={u.id} className="hover:bg-slate-50">
+                                        <td className="px-5 py-3">
+                                          <div className="font-medium text-slate-900">{u.fullName}</div>
+                                          <div className="text-xs text-slate-500">{u.email}</div>
+                                        </td>
+                                        <td className="px-4 py-3 font-mono text-xs text-slate-700">{u.nisNisn || '-'}</td>
+                                        <td className="px-4 py-3 font-mono text-xs text-slate-700">{u.username}</td>
+                                        <td className="px-4 py-3">
+                                          <StatusLabel status={u.status} />
+                                        </td>
+                                        <td className="px-4 py-3 font-mono tabular-nums text-xs text-slate-500">
+                                          {formatLocalDate(u.createdAt)}
+                                        </td>
+                                        <td className="px-5 py-3 text-right">{renderUserActionButtons(u)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
       {/* 4. DATA SISWA */}
       {activeTab === 'data-siswa' && (
         <div className="space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 font-display">Data Siswa Lintas Sekolah</h1>
-            <p className="text-sm text-slate-500 mt-0.5">
-              Menampilkan identitas dasar dan status akun peserta didik. Jurnal pribadi dan isi konsultasi tetap bersifat rahasia.
-            </p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900 font-display">Data Siswa Per Sekolah &amp; Kelas</h1>
+              <p className="text-sm text-slate-500 mt-0.5">
+                Dipisahkan per sekolah dan dikelompokkan sesuai kelasnya. Jurnal pribadi dan isi konsultasi tetap bersifat rahasia.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => openAddStudent(studentSchoolFilter || '')}
+              className="px-4 py-2 bg-violet-700 hover:bg-violet-800 text-white text-sm font-medium rounded-lg inline-flex items-center gap-2 self-start sm:self-auto"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Tambah Peserta Didik</span>
+            </button>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1318,7 +2017,10 @@ export function AdminDashboard({
             </div>
             <select
               value={studentSchoolFilter}
-              onChange={(e) => setStudentSchoolFilter(e.target.value)}
+              onChange={(e) => {
+                setStudentSchoolFilter(e.target.value);
+                setStudentClassFilter('');
+              }}
               className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg"
             >
               <option value="">Semua Sekolah</option>
@@ -1328,64 +2030,215 @@ export function AdminDashboard({
                 </option>
               ))}
             </select>
-            <input
-              type="text"
+            <select
               value={studentClassFilter}
               onChange={(e) => setStudentClassFilter(e.target.value)}
-              placeholder="Filter nama kelas (contoh: X IPA 1)"
               className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg"
-            />
+            >
+              <option value="">Semua Kelas</option>
+              {Array.from(
+                new Set(
+                  students
+                    .map((st) => st.className)
+                    .filter((cn): cn is string => Boolean(cn && cn !== '-'))
+                )
+              )
+                .sort((a, b) => a.localeCompare(b, 'id'))
+                .map((clsName) => (
+                  <option key={clsName} value={clsName}>
+                    Kelas {clsName}
+                  </option>
+                ))}
+            </select>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                  <tr>
-                    <th className="text-left px-5 py-3 font-medium">Nama Siswa</th>
-                    <th className="text-left px-4 py-3 font-medium">NIS/NISN</th>
-                    <th className="text-left px-4 py-3 font-medium">Sekolah</th>
-                    <th className="text-left px-4 py-3 font-medium">Kelas</th>
-                    <th className="text-left px-4 py-3 font-medium">Status Akun</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {students.map((st) => (
-                    <tr key={st.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-3">
-                        <div className="font-medium text-slate-900">{st.fullName}</div>
-                        <div className="text-xs text-slate-500 font-mono">{st.username} · {st.email}</div>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.nisNisn}</td>
-                      <td className="px-4 py-3 text-slate-700">{st.schoolName}</td>
-                      <td className="px-4 py-3 text-slate-700">{st.className}</td>
-                      <td className="px-4 py-3">
-                        <StatusLabel status={st.status} />
-                      </td>
-                    </tr>
-                  ))}
-                  {!students.length && (
-                    <tr>
-                      <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-500">
-                        Tidak ada data siswa yang sesuai filter.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {(() => {
+            const bySchool = new Map<
+              string,
+              {
+                schoolId: string;
+                schoolName: string;
+                totalCount: number;
+                classes: Map<string, StudentRecord[]>;
+              }
+            >();
+
+            for (const st of students) {
+              const sid = st.schoolId;
+              if (!bySchool.has(sid)) {
+                bySchool.set(sid, {
+                  schoolId: sid,
+                  schoolName: st.schoolName || 'Sekolah Mitra',
+                  totalCount: 0,
+                  classes: new Map<string, StudentRecord[]>(),
+                });
+              }
+              const sGroup = bySchool.get(sid)!;
+              sGroup.totalCount += 1;
+              const clsKey = st.className && st.className !== '-' ? st.className : 'Belum Ada Kelas';
+              if (!sGroup.classes.has(clsKey)) {
+                sGroup.classes.set(clsKey, []);
+              }
+              sGroup.classes.get(clsKey)!.push(st);
+            }
+
+            const schoolEntries = Array.from(bySchool.values()).sort((a, b) =>
+              a.schoolName.localeCompare(b.schoolName, 'id')
+            );
+
+            if (!schoolEntries.length) {
+              return (
+                <div className="bg-white border border-slate-200 rounded-xl px-5 py-10 text-center text-sm text-slate-500">
+                  Tidak ada data siswa yang sesuai filter.
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-6">
+                {schoolEntries.map((sg) => {
+                  const classEntries = Array.from(sg.classes.entries()).sort(([a], [b]) => {
+                    if (a === 'Belum Ada Kelas') return 1;
+                    if (b === 'Belum Ada Kelas') return -1;
+                    return a.localeCompare(b, 'id');
+                  });
+
+                  return (
+                    <div key={sg.schoolId} className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                      {/* School Header */}
+                      <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center shrink-0">
+                            <Building2 className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <h2 className="text-base font-bold text-slate-900 truncate">{sg.schoolName}</h2>
+                            <p className="text-xs text-slate-500">
+                              <span className="font-mono font-semibold text-slate-700">{sg.totalCount}</span> peserta didik ·{' '}
+                              <span className="font-mono font-semibold text-slate-700">{classEntries.length}</span> kelas
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openAddStudent(sg.schoolId)}
+                          className="px-3 py-1.5 text-xs font-semibold text-violet-700 bg-violet-50 hover:bg-violet-100 rounded-lg self-start sm:self-auto"
+                        >
+                          + Tambah Siswa ke Sekolah Ini
+                        </button>
+                      </div>
+
+                      {/* Class Sub-Sections inside this School */}
+                      <div className="divide-y divide-slate-200">
+                        {classEntries.map(([clsName, list]) => (
+                          <div key={clsName}>
+                            <div className="px-5 py-2.5 bg-violet-50/40 border-b border-slate-100 flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-800">
+                                {clsName === 'Belum Ada Kelas' ? 'Belum Ada Kelas' : `Kelas ${clsName}`}
+                              </span>
+                              <span className="text-xs font-mono text-slate-600">{list.length} siswa</span>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead className="bg-white text-xs text-slate-500 border-b border-slate-100">
+                                  <tr>
+                                    <th className="text-left px-5 py-2.5 font-medium">Nama Siswa</th>
+                                    <th className="text-left px-4 py-2.5 font-medium">NIS/NISN</th>
+                                    <th className="text-left px-4 py-2.5 font-medium">Jenis Kelamin</th>
+                                    <th className="text-left px-4 py-2.5 font-medium">Status Akun</th>
+                                    <th className="text-right px-5 py-2.5 font-medium">Aksi</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {list.map((st) => (
+                                    <tr key={st.id} className="hover:bg-slate-50">
+                                      <td className="px-5 py-3">
+                                        <div className="font-medium text-slate-900">{st.fullName}</div>
+                                        <div className="text-xs text-slate-500 font-mono">
+                                          {st.username} · {st.email}
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{st.nisNisn}</td>
+                                      <td className="px-4 py-3 text-xs text-slate-600">{st.gender}</td>
+                                      <td className="px-4 py-3">
+                                        <StatusLabel status={st.status} />
+                                      </td>
+                                      <td className="px-5 py-3 text-right">
+                                        <div className="inline-flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => setResetPwdUser({ id: st.userId, name: st.fullName })}
+                                            className="p-1.5 text-slate-600 hover:text-violet-700 hover:bg-violet-50 rounded-md"
+                                            title="Reset Password"
+                                          >
+                                            <KeyRound className="w-4 h-4" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              toggleUserStatus({
+                                                id: st.userId,
+                                                username: st.username,
+                                                status: st.status,
+                                              })
+                                            }
+                                            className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-md"
+                                            title={st.status === 'ACTIVE' ? 'Nonaktifkan' : 'Aktifkan'}
+                                          >
+                                            <Power className="w-4 h-4" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setDeleteUserTarget({
+                                                id: st.userId,
+                                                fullName: st.fullName,
+                                                roleLabel: 'Peserta Didik',
+                                              })
+                                            }
+                                            className="p-1.5 text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded-md"
+                                            title="Hapus Peserta Didik"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
       {/* 5. AUDIT LOG */}
       {activeTab === 'audit-log' && (
         <div className="space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 font-display">Audit Log Sistem</h1>
-            <p className="text-sm text-slate-500 mt-0.5">
-              Catatan kronologis aktivitas autentikasi, pengelolaan sekolah, akun Guru BK, dan perubahan status.
-            </p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900 font-display">Audit Log Sistem</h1>
+              <p className="text-sm text-slate-500 mt-0.5">
+                Catatan kronologis aktivitas autentikasi, pengelolaan sekolah, akun Guru BK, dan perubahan status.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={auditLogs.length === 0}
+              onClick={() => setClearAuditModalOpen(true)}
+              className="px-3.5 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-700 text-sm font-medium rounded-lg inline-flex items-center gap-2 self-start sm:self-auto disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Hapus Semua Riwayat</span>
+            </button>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1420,13 +2273,14 @@ export function AdminDashboard({
                     <th className="text-left px-4 py-3 font-medium">Pengguna</th>
                     <th className="text-left px-4 py-3 font-medium">Aksi</th>
                     <th className="text-left px-5 py-3 font-medium">Keterangan</th>
+                    <th className="text-right px-5 py-3 font-medium">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {auditLogs.map((l) => (
-                    <tr key={l.id}>
+                    <tr key={l.id} className="hover:bg-slate-50">
                       <td className="px-5 py-3 font-mono tabular-nums text-xs text-slate-500 whitespace-nowrap">
-                        {l.createdAt}
+                        {formatLocalDateTime(l.createdAt, true)}
                       </td>
                       <td className="px-4 py-3 text-xs">
                         <div className="font-semibold text-slate-900">{l.username}</div>
@@ -1436,8 +2290,25 @@ export function AdminDashboard({
                         {l.action}
                       </td>
                       <td className="px-5 py-3 text-slate-700">{l.details}</td>
+                      <td className="px-5 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setDeleteAuditTarget(l)}
+                          className="p-1.5 text-slate-500 hover:text-rose-700 hover:bg-rose-50 rounded-md"
+                          title="Hapus Riwayat Log"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
+                  {!auditLogs.length && (
+                    <tr>
+                      <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-500">
+                        Riwayat Audit Log kosong.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1997,6 +2868,189 @@ export function AdminDashboard({
         </form>
       </Modal>
 
+      {/* DETAIL SEKOLAH MODAL (QR & TAUTAN SISWA + GURU BK + AKSI) */}
+      <Modal
+        open={Boolean(detailModalSchoolId)}
+        onClose={() => setDetailModalSchoolId(null)}
+        title={schoolDetail?.school.name ?? 'Detail Sekolah'}
+        maxWidth="max-w-xl"
+        customHeader={
+          schoolDetail && schoolDetail.school.id === detailModalSchoolId ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-700 flex items-center justify-center shrink-0">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-slate-900 truncate">{schoolDetail.school.name}</h3>
+                  <p className="text-xs text-slate-500 truncate">
+                    {schoolDetail.school.address} · Kode{' '}
+                    <span className="font-mono font-semibold text-slate-700">
+                      {schoolDetail.school.code || schoolDetail.school.npsn}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <div className="shrink-0">
+                <StatusLabel status={schoolDetail.school.status} />
+              </div>
+            </div>
+          ) : (
+            <h3 className="text-base font-semibold text-slate-900">Memuat Detail Sekolah...</h3>
+          )
+        }
+      >
+        {detailModalLoading || !schoolDetail || schoolDetail.school.id !== detailModalSchoolId ? (
+          <div className="py-10 text-center text-sm text-slate-500">Memuat data sekolah...</div>
+        ) : (
+          (() => {
+            const sc = schoolDetail.school;
+            const schoolCode = sc.code || sc.npsn;
+            const origin = typeof window !== 'undefined' ? window.location.origin : '';
+            const studentInviteUrl = `${origin}/?s=${encodeURIComponent(schoolCode)}`;
+
+            return (
+              <div className="space-y-5">
+                {/* QR Code & Student Link Box */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row items-center gap-4">
+                  <div className="p-2.5 bg-white border border-slate-200 rounded-xl shrink-0">
+                    <QRCodeSVG value={studentInviteUrl} size={108} level="M" />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1.5 text-center sm:text-left">
+                    <div className="text-sm font-bold text-slate-900">Tautan siswa {sc.name}</div>
+                    <div className="text-xs font-mono text-violet-700 break-all select-all">
+                      {studentInviteUrl}
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Siswa yang membuka atau memindai tautan ini otomatis terhubung ke sekolah dan Guru BK sekolah ini saat mendaftar.
+                    </p>
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => copyStudentLink(studentInviteUrl)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-100 hover:bg-violet-200 text-violet-800 text-xs font-semibold rounded-lg transition-colors"
+                      >
+                        {copiedSchoolLink ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Tautan tersalin!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Link2 className="w-3.5 h-3.5" />
+                            <span>Salin tautan</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Guru BK List */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold tracking-wider text-slate-500">
+                      GURU BK ({schoolDetail.bkTeachers.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openAddBk(sc.id)}
+                      className="text-xs font-semibold text-violet-700 hover:underline inline-flex items-center gap-1"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Tambah Guru BK</span>
+                    </button>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl bg-white divide-y divide-slate-100">
+                    {schoolDetail.bkTeachers.map((bk) => (
+                      <div key={bk.id} className="px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-900 truncate">{bk.fullName}</div>
+                          <div className="text-xs text-slate-500 truncate">{bk.email}</div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <StatusLabel status={bk.status} />
+                          <button
+                            type="button"
+                            onClick={() => openEditBk(bk)}
+                            className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md"
+                            title="Edit Guru BK"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setResetPwdUser({ id: bk.userId, name: bk.fullName })}
+                            className="p-1 text-slate-500 hover:text-violet-700 hover:bg-violet-50 rounded-md"
+                            title="Reset Password"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {!schoolDetail.bkTeachers.length && (
+                      <div className="px-4 py-4 text-xs text-slate-500 text-center">
+                        Belum ada Guru BK terdaftar di sekolah ini. Klik Tambah Guru BK untuk mendaftarkan.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Access to full Class & Student Management view */}
+                <div className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs">
+                  <span className="text-slate-600">
+                    Kelas: <strong className="text-slate-900 font-mono">{schoolDetail.classes.length}</strong> · Peserta Didik:{' '}
+                    <strong className="text-slate-900 font-mono">{schoolDetail.students.length}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = sc.id;
+                      setDetailModalSchoolId(null);
+                      setSelectedSchoolId(targetId);
+                    }}
+                    className="font-semibold text-violet-700 hover:underline"
+                  >
+                    Kelola Kelas &amp; Siswa →
+                  </button>
+                </div>
+
+                {/* Bottom 3 Action Buttons */}
+                <div className="grid grid-cols-3 gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => openEditSchool(sc)}
+                    className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-semibold rounded-xl transition-colors"
+                  >
+                    Ubah
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleSchoolStatus(sc)}
+                    className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-semibold rounded-xl transition-colors"
+                  >
+                    {sc.status === 'ACTIVE' ? 'Nonaktifkan' : 'Aktifkan'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteSchoolTarget(sc)}
+                    className="py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl transition-colors"
+                  >
+                    Hapus
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Sekolah nonaktif tidak muncul di pilihan pendaftaran siswa. Menghapus sekolah akan menghapus data kelas, akun Guru BK, dan peserta didik di sekolah ini secara permanen.
+                </p>
+              </div>
+            );
+          })()
+        )}
+      </Modal>
+
       <ConfirmModal
         open={Boolean(deleteSchoolTarget)}
         onClose={() => setDeleteSchoolTarget(null)}
@@ -2011,6 +3065,30 @@ export function AdminDashboard({
         onConfirm={confirmDeleteBk}
         title="Konfirmasi Hapus Guru BK"
         message={`Hapus akun Guru BK "${deleteBkTarget?.fullName}" dari sistem?`}
+      />
+
+      <ConfirmModal
+        open={Boolean(deleteUserTarget)}
+        onClose={() => setDeleteUserTarget(null)}
+        onConfirm={confirmDeleteUser}
+        title={`Konfirmasi Hapus ${deleteUserTarget?.roleLabel ?? 'Pengguna'}`}
+        message={`Menghapus akun ${deleteUserTarget?.roleLabel ?? 'pengguna'} "${deleteUserTarget?.fullName}" akan menghapus akun beserta seluruh data terkaitnya secara permanen. Lanjutkan?`}
+      />
+
+      <ConfirmModal
+        open={Boolean(deleteAuditTarget)}
+        onClose={() => setDeleteAuditTarget(null)}
+        onConfirm={confirmDeleteAuditLog}
+        title="Hapus Riwayat Audit Log"
+        message={`Hapus catatan log aktivitas "${deleteAuditTarget?.action}" oleh ${deleteAuditTarget?.username}?`}
+      />
+
+      <ConfirmModal
+        open={clearAuditModalOpen}
+        onClose={() => setClearAuditModalOpen(false)}
+        onConfirm={confirmClearAuditLogs}
+        title="Hapus Semua Riwayat Audit Log"
+        message="Seluruh catatan riwayat Audit Log yang tersimpan akan dihapus permanen. Lanjutkan?"
       />
 
       <Modal

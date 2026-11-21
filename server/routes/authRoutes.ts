@@ -211,15 +211,31 @@ authRoutes.post('/forgot-password', (req, res) => {
   });
 });
 
+function buildPublicSchoolCode(name: string, npsn: string): string {
+  const slug = name
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 24)
+    .replace(/-$/g, '');
+  return slug || `SCH-${npsn}`;
+}
+
 authRoutes.get('/public-schools', (_req, res) => {
-  const schools = db
+  const rawSchools = db
     .prepare(
-      `SELECT id, name, level
+      `SELECT id, name, level, npsn
        FROM schools
        WHERE status = 'ACTIVE'
        ORDER BY name ASC`
     )
-    .all() as Array<{ id: string; name: string; level: string }>;
+    .all() as Array<{ id: string; name: string; level: string; npsn: string }>;
+
+  const schools = rawSchools.map((s) => ({
+    ...s,
+    code: buildPublicSchoolCode(s.name, s.npsn),
+  }));
 
   const classes = db
     .prepare(

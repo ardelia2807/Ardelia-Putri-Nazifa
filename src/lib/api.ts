@@ -86,3 +86,44 @@ export function downloadCsv(filename: string, headers: string[], rows: Array<Arr
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+export function parseUtcTimestamp(raw?: string | null): Date | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let iso = trimmed;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+    iso = trimmed.replace(' ', 'T') + 'Z';
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
+    iso = trimmed + 'Z';
+  }
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function formatLocalDateTime(raw?: string | null, withSeconds = true): string {
+  const d = parseUtcTimestamp(raw);
+  if (!d) return raw || '-';
+  const datePart = new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(d);
+  const timePart = new Intl.DateTimeFormat('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(withSeconds ? { second: '2-digit' } : {}),
+    hour12: false,
+  }).format(d);
+  return `${datePart}, ${timePart.replace(/\./g, ':')}`;
+}
+
+export function formatLocalDate(raw?: string | null): string {
+  const d = parseUtcTimestamp(raw);
+  if (!d) return raw ? raw.slice(0, 10) : '-';
+  return new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(d);
+}
